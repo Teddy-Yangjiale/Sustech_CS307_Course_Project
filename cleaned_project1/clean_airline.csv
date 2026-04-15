@@ -1,0 +1,89 @@
+airline_id,airline_code,airline_name,region_code
+1,NS,Caucasus Airlines,GE
+2,MM,Peach Aviation,JP
+3,FR,Ryanair,IE
+4,KL,KLM Royal Dutch Airlines,NL
+5,JW,Arrow Air,US
+6,MU,China Eastern Airlines,CN
+7,ET,Ethiopian Airlines,ET
+8,KU,Kuwait Airways,KW
+9,GS,Air Foyle,GB
+10,MF,Xiamen Airlines,CN
+11,CZ,China Southern Airlines,CN
+12,PN,West Air China,CN
+13,DL,Delta Air Lines,US
+14,AM,AeroMéxico,MX
+15,TK,Turkish Airlines,TR
+16,GE,TransAsia Airways,TW
+17,CX,Cathay Pacific,HK
+18,KA,Dragonair,HK
+19,MI,SilkAir,SG
+20,B7,Uni Air,TW
+21,UA,United Airlines,US
+22,KY,KSY,GR
+23,VS,Virgin Atlantic Airways,GB
+24,HO,Juneyao Airlines,CN
+25,SE,XL Airways France,FR
+26,AZ,Alitalia,IT
+27,UO,Hong Kong Express Airways,HK
+28,AF,Air France,FR
+29,QR,Qatar Airways,QA
+30,NH,All Nippon Airways,JP
+31,UX,Air Europa,ES
+32,G5,Huaxia,CN
+33,AE,Mandarin Airlines,TW
+34,3K,Jetstar Asia Airways,SG
+35,JJ,TAM Brazilian Airlines,BR
+36,US,US Airways,US
+37,EU,Empresa Ecuatoriana De Aviacion,EC
+38,9C,China SSS,CN
+39,JD,Japan Air System,JP
+40,PK,Pakistan International Airlines,PK
+41,B6,JetBlue Airways,US
+42,DZ,Starline.kz,KZ
+43,TN,Air Tahiti Nui,FR
+44,AY,Finnair,FI
+45,BA,British Airways,GB
+46,NZ,Air New Zealand,NZ
+47,EK,Emirates,AE
+48,ZB,Air Bourbon,RE
+49,CI,China Airlines,TW
+50,SU,Aeroflot Russian Airlines,RU
+51,7C,Jeju Air,KR
+52,TW,Tway Airlines,KR
+53,TR,Tiger Airways,SG
+54,VA,Virgin Australia,AU
+55,VY,Formosa Airlines,TW
+56,ZH,Shenzhen Airlines,CN
+57,KN,China United,CN
+58,BV,Blue Panorama Airlines,IT
+59,TG,Thai Airways International,TH
+60,HX,Hong Kong Airlines,HK
+61,BK,Potomac Air,US
+62,LH,Lufthansa,DE
+63,BR,EVA Air,TW
+64,S7,S7 Airlines,RU
+65,SQ,Singapore Airlines,SG
+66,FM,Shanghai Airlines,CN
+67,CN,Canadian National Airways,CA
+68,IB,Iberia Airlines,ES
+69,AA,American Airlines,US
+70,TZ,Scoot,SG
+71,OZ,Asiana Airlines,KR
+72,KE,Korean Air,KR
+73,GA,Garuda Indonesia,ID
+74,3U,Sichuan Airlines,CN
+75,GK,Genesis,PK
+76,QF,Qantas,AU
+77,U2,easyJet,GB
+78,TV,Virgin Express,BE
+79,SC,Shandong Airlines,CN
+80,JL,Japan Airlines,JP
+81,EY,Etihad Airways,AE
+82,LJ,Jin Air,KR
+83,AI,Air India Limited,IN
+84,8L,Cargo Plus Aviation,AE
+85,UN,Transaero Airlines,RU
+86,CA,Air China,CN
+87,ZE,Eastar Jet,KR
+88,HU,Hainan Airlines,CN

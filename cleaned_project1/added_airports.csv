@@ -1,0 +1,4 @@
+airport_id,iata_code,airport_name,city,region_code,latitude,longitude,altitude,timezone_offset,timezone_dst,timezone_region
+205,JGS,Ji'an Jinggangshan Airport,Jian,CN,26.856899,114.737,86.0,8,N,Asia/Shanghai
+206,LLB,Qiannan Libo Airport,Libo,CN,25.4525,107.961667,,8,N,Asia/Shanghai
+207,YZY,Zhangye Ganzhou Airport,Zhangye,CN,38.801899,100.675003,1609.0,8,N,Asia/Shanghai

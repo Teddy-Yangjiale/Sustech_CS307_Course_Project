@@ -1,0 +1,187 @@
+drop table if exists ticket_order cascade;
+drop table if exists flight_cabin cascade;
+drop table if exists flight cascade;
+drop table if exists route cascade;
+drop table if exists passenger cascade;
+drop table if exists airport cascade;
+drop table if exists airline cascade;
+drop table if exists region cascade;
+
+
+create table region (
+    region_code varchar(10) primary key,
+    region_name varchar(100) not null unique
+);
+
+
+create table airline (
+    airline_id int primary key,
+    airline_code varchar(10) not null unique,
+    airline_name varchar(100) not null unique,
+    region_code varchar(10) not null,
+
+    constraint fk_airline_region
+        foreign key (region_code)
+        references region(region_code)
+        on update cascade
+        on delete restrict
+);
+
+
+create table airport (
+    airport_id int primary key,
+    iata_code varchar(10) unique,
+    airport_name varchar(150) not null,
+    city varchar(100) not null,
+    region_code varchar(10) not null,
+    latitude numeric(9,6) not null,
+    longitude numeric(9,6) not null,
+    altitude int,
+    timezone_offset int not null,
+    timezone_dst varchar(10),
+    timezone_region varchar(100),
+
+    constraint fk_airport_region
+        foreign key (region_code)
+        references region(region_code)
+        on update cascade
+        on delete restrict
+);
+
+
+create table passenger (
+    passenger_id int primary key,
+    passenger_name varchar(100) not null,
+    age int not null,
+    gender varchar(10) not null,
+    mobile_number varchar(20) not null unique,
+
+    constraint chk_passenger_age
+        check (age > 0 and age < 130),
+
+    constraint chk_passenger_gender
+        check (gender in ('Male', 'Female', 'Unknown'))
+);
+
+
+create table route (
+    route_id bigserial primary key,
+    flight_number varchar(20) not null,
+    airline_id int not null,
+    source_airport_id int not null,
+    destination_airport_id int not null,
+    scheduled_departure_time time not null,
+    scheduled_arrival_time time not null,
+    arrival_day_offset int not null,
+
+    constraint fk_route_airline
+        foreign key (airline_id)
+        references airline(airline_id)
+        on update cascade
+        on delete restrict,
+
+    constraint fk_route_source_airport
+        foreign key (source_airport_id)
+        references airport(airport_id)
+        on update cascade
+        on delete restrict,
+
+    constraint fk_route_destination_airport
+        foreign key (destination_airport_id)
+        references airport(airport_id)
+        on update cascade
+        on delete restrict,
+
+    constraint chk_route_day_offset
+        check (arrival_day_offset in (0, 1)),
+
+    constraint chk_route_airports_different
+        check (source_airport_id <> destination_airport_id),
+
+    constraint uq_route
+        unique (
+            flight_number,
+            airline_id,
+            source_airport_id,
+            destination_airport_id,
+            scheduled_departure_time,
+            scheduled_arrival_time,
+            arrival_day_offset
+        )
+);
+
+
+create table flight (
+    flight_id bigserial primary key,
+    route_id bigint not null,
+    flight_date date not null,
+
+    constraint fk_flight_route
+        foreign key (route_id)
+        references route(route_id)
+        on update cascade
+        on delete restrict,
+
+    constraint uq_flight_route_date
+        unique (route_id, flight_date)
+);
+
+
+create table flight_cabin (
+    flight_id bigint not null,
+    cabin_class varchar(20) not null,
+    price numeric(10,2) not null,
+    remain_count int not null,
+
+    constraint pk_flight_cabin
+        primary key (flight_id, cabin_class),
+
+    constraint fk_flight_cabin_flight
+        foreign key (flight_id)
+        references flight(flight_id)
+        on update cascade
+        on delete restrict,
+
+    constraint chk_flight_cabin_class
+        check (cabin_class in ('ECONOMY', 'BUSINESS')),
+
+    constraint chk_flight_cabin_price
+        check (price >= 0),
+
+    constraint chk_flight_cabin_remain
+        check (remain_count >= 0)
+);
+
+
+create table ticket_order (
+    order_id bigserial primary key,
+    passenger_id int not null,
+    flight_id bigint not null,
+    cabin_class varchar(20) not null,
+    order_status varchar(20) not null,
+    order_time timestamp not null default current_timestamp,
+    ticket_price numeric(10,2) not null,
+
+    constraint fk_ticket_order_passenger
+        foreign key (passenger_id)
+        references passenger(passenger_id)
+        on update cascade
+        on delete restrict,
+
+    constraint fk_ticket_order_flight
+        foreign key (flight_id)
+        references flight(flight_id)
+        on update cascade
+        on delete restrict,
+
+    constraint chk_ticket_order_cabin_class
+        check (cabin_class in ('ECONOMY', 'BUSINESS')),
+
+    constraint chk_ticket_order_status
+        check (order_status in ('CREATED', 'PAID', 'CANCELLED', 'REFUNDED')),
+
+    constraint chk_ticket_order_price
+        check (ticket_price >= 0)
+);
+
+

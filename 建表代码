@@ -57,7 +57,7 @@ create table passenger (
     gender varchar(10) not null,
     mobile_number varchar(20) not null unique,
 
-    login_password_hash varchar(255) not null,
+    login_password_hash varchar(255),
     account_status varchar(20) not null default 'ACTIVE',
     created_at timestamp not null default current_timestamp,
     updated_at timestamp not null default current_timestamp,
@@ -229,3 +229,10 @@ create table ticket_order (
     constraint chk_ticket_order_price
         check (ticket_price >= 0)
 );
+
+
+create index if not exists idx_flight_date
+    on flight(flight_date);
+
+create index if not exists idx_order_time
+    on ticket_order(order_time);

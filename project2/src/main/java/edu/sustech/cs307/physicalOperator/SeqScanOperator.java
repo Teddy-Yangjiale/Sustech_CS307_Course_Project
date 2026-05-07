@@ -27,6 +27,7 @@ public class SeqScanOperator implements PhysicalOperator {
     private int totalPages;
     private int recordsPerPage;
     private boolean isOpen = false;
+    private RID currentRid;
 
     public SeqScanOperator(String tableName, DBManager dbManager) {
         this.tableName = tableName;
@@ -68,9 +69,9 @@ public class SeqScanOperator implements PhysicalOperator {
     public void Begin() throws DBException {
         try {
             fileHandle = dbManager.getRecordManager().OpenFile(tableName);
-            totalPages = fileHandle.getFileHeader().getNumberOfPages();
+            totalPages = fileHandle.getFileHeader().getNumberOfPages() - 2;
             recordsPerPage = fileHandle.getFileHeader().getNumberOfRecordsPrePage();
-            currentPageNum = 1; // Start from first page
+            currentPageNum = 0; // Start from first record page
             currentSlotNum = 0; // Start from first slot
             isOpen = true;
         } catch (DBException e) {
@@ -87,19 +88,20 @@ public class SeqScanOperator implements PhysicalOperator {
             if (hasNext()) { // Advance to the next record
                 RID rid = new RID(currentPageNum, currentSlotNum);
                 currentRecord = fileHandle.GetRecord(rid);
+                currentRid = rid;
                 currentSlotNum++;
                 if (currentSlotNum >= recordsPerPage) {
                     currentPageNum++;
                     currentSlotNum = 0;
                 }
-                // readonly
-                fileHandle.UnpinPageHandle(currentPageNum, false);
             } else {
                 currentRecord = null;
+                currentRid = null;
             }
         } catch (DBException e) {
             e.printStackTrace(); // Handle exception properly
             currentRecord = null;
+            currentRid = null;
         }
     }
 
@@ -108,7 +110,7 @@ public class SeqScanOperator implements PhysicalOperator {
         if (!isOpen || currentRecord == null) {
             return null;
         }
-        return new TableTuple(tableName, tableMeta, currentRecord, new RID(this.currentPageNum, this.currentSlotNum - 1));
+        return new TableTuple(tableName, tableMeta, currentRecord, currentRid);
     }
 
     @Override
@@ -122,6 +124,7 @@ public class SeqScanOperator implements PhysicalOperator {
         }
         fileHandle = null;
         currentRecord = null;
+        currentRid = null;
         isOpen = false;
     }
 

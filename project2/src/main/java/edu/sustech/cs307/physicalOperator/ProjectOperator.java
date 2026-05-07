@@ -24,7 +24,33 @@ public class ProjectOperator implements PhysicalOperator {
                 newOutputSchema.add(new TabCol(tabCol.tableName, tabCol.name));
             }
             this.outputSchema = newOutputSchema;
+        } else {
+            this.outputSchema = resolveSchema(outputSchema);
         }
+    }
+
+    private List<TabCol> resolveSchema(List<TabCol> requestedSchema) {
+        List<TabCol> resolved = new ArrayList<>();
+        for (TabCol requested : requestedSchema) {
+            if (requested.getTableName() != null && !requested.getTableName().isBlank()) {
+                resolved.add(requested);
+                continue;
+            }
+            TabCol match = null;
+            for (ColumnMeta columnMeta : child.outputSchema()) {
+                if (columnMeta.name.equalsIgnoreCase(requested.getColumnName())) {
+                    if (match != null) {
+                        throw new RuntimeException("Ambiguous column in projection: " + requested.getColumnName());
+                    }
+                    match = new TabCol(columnMeta.tableName, columnMeta.name);
+                }
+            }
+            if (match == null) {
+                throw new RuntimeException("Column not found in projection: " + requested.getColumnName());
+            }
+            resolved.add(match);
+        }
+        return resolved;
     }
 
     @Override
@@ -66,7 +92,16 @@ public class ProjectOperator implements PhysicalOperator {
 
     @Override
     public ArrayList<ColumnMeta> outputSchema() {
-        //todo: return the fields only appear in select items.
-        return child.outputSchema();
+        ArrayList<ColumnMeta> schema = new ArrayList<>();
+        for (TabCol tabCol : outputSchema) {
+            for (ColumnMeta columnMeta : child.outputSchema()) {
+                if (columnMeta.tableName.equalsIgnoreCase(tabCol.getTableName())
+                        && columnMeta.name.equalsIgnoreCase(tabCol.getColumnName())) {
+                    schema.add(columnMeta);
+                    break;
+                }
+            }
+        }
+        return schema;
     }
 }

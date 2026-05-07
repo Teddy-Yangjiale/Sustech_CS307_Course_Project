@@ -28,6 +28,8 @@ public class PhysicalPlanner {
             return handleTableScan(dbManager, tableScanOperator);
         } else if (logicalOp instanceof LogicalFilterOperator filterOperator) {
             return handleFilter(dbManager, filterOperator);
+        } else if (logicalOp instanceof LogicalSubqueryFilterOperator subqueryFilterOperator) {
+            return handleSubqueryFilter(dbManager, subqueryFilterOperator);
         } else if (logicalOp instanceof LogicalJoinOperator joinOperator) {
             return handleJoin(dbManager, joinOperator);
         } else if (logicalOp instanceof LogicalProjectOperator projectOperator) {
@@ -36,6 +38,12 @@ public class PhysicalPlanner {
             return handleInsert(dbManager, insertOperator);
         } else if (logicalOp instanceof LogicalUpdateOperator updateOperator) {
             return handleUpdate(dbManager, updateOperator);
+        } else if (logicalOp instanceof LogicalDeleteOperator deleteOperator) {
+            return handleDelete(dbManager, deleteOperator);
+        } else if (logicalOp instanceof LogicalOrderOperator orderOperator) {
+            return handleOrder(dbManager, orderOperator);
+        } else if (logicalOp instanceof LogicalAggregateOperator aggregateOperator) {
+            return handleAggregate(dbManager, aggregateOperator);
         }
 
         else {
@@ -68,21 +76,26 @@ public class PhysicalPlanner {
         return new FilterOperator(inputOp, logicalFilterOp.getWhereExpr());
     }
 
+    private static PhysicalOperator handleSubqueryFilter(DBManager dbManager,
+                                                         LogicalSubqueryFilterOperator logicalFilterOp)
+            throws DBException {
+        PhysicalOperator inputOp = generateOperator(dbManager, logicalFilterOp.getChild());
+        return new SubqueryFilterOperator(dbManager, inputOp, logicalFilterOp.getWhereExpr());
+    }
+
     private static PhysicalOperator handleJoin(DBManager dbManager, LogicalJoinOperator logicalJoinOp)
             throws DBException {
         PhysicalOperator leftOp = generateOperator(dbManager, logicalJoinOp.getLeftInput());
         PhysicalOperator rightOp = generateOperator(dbManager, logicalJoinOp.getRightInput());
-        PhysicalOperator joinOp = new NestedLoopJoinOperator(leftOp, rightOp, logicalJoinOp.getJoinExprs());
-
-        Collection<Expression> joinFilters = logicalJoinOp.getJoinExprs();
-        PhysicalOperator finalOp = new FilterOperator(joinOp, joinFilters);
-
-        return finalOp;
+        return new NestedLoopJoinOperator(leftOp, rightOp, logicalJoinOp.getJoinExprs());
     }
 
     private static PhysicalOperator handleProject(DBManager dbManager, LogicalProjectOperator logicalProjectOp)
             throws DBException {
         PhysicalOperator inputOp = generateOperator(dbManager, logicalProjectOp.getChild());
+        if (logicalProjectOp.isCountAll()) {
+            return new CountOperator(inputOp);
+        }
         return new ProjectOperator(inputOp, logicalProjectOp.getOutputSchema());
     }
 
@@ -194,5 +207,20 @@ public class PhysicalPlanner {
             throw new DBException(ExceptionTypes.InvalidSQL("INSERT", "Unsupported expression list"));
         }
         return new UpdateOperator(scanner, logicalUpdateOp.getTableName(), logicalUpdateOp.getColumns().get(0), logicalUpdateOp.getExpression());
+    }
+
+    private static PhysicalOperator handleDelete(DBManager dbManager, LogicalDeleteOperator logicalDeleteOp) throws DBException {
+        PhysicalOperator scanner = generateOperator(dbManager, logicalDeleteOp.getChild());
+        return new DeleteOperator(scanner, logicalDeleteOp.getWhereExpr());
+    }
+
+    private static PhysicalOperator handleOrder(DBManager dbManager, LogicalOrderOperator logicalOrderOp) throws DBException {
+        PhysicalOperator inputOp = generateOperator(dbManager, logicalOrderOp.getChild());
+        return new OrderByOperator(inputOp, logicalOrderOp.getOrderByElements());
+    }
+
+    private static PhysicalOperator handleAggregate(DBManager dbManager, LogicalAggregateOperator logicalAggregateOp) throws DBException {
+        PhysicalOperator inputOp = generateOperator(dbManager, logicalAggregateOp.getChild());
+        return new AggregateOperator(inputOp, logicalAggregateOp.getSelectItems(), logicalAggregateOp.getGroupByExpressions());
     }
 }

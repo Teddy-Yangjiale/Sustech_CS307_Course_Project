@@ -2,8 +2,8 @@ package edu.sustech.cs307.physicalOperator;
 
 import edu.sustech.cs307.exception.DBException;
 import edu.sustech.cs307.meta.ColumnMeta;
+import edu.sustech.cs307.meta.TableMeta;
 import edu.sustech.cs307.system.DBManager;
-import edu.sustech.cs307.tuple.TableTuple;
 import edu.sustech.cs307.tuple.TempTuple;
 import edu.sustech.cs307.tuple.Tuple;
 import edu.sustech.cs307.value.Value;
@@ -40,10 +40,12 @@ public class InsertOperator implements PhysicalOperator {
     public void Begin() throws DBException {
         try {
             var fileHandle = dbManager.getRecordManager().OpenFile(data_file);
+            TableMeta tableMeta = dbManager.getMetaManager().getTable(data_file);
             // Serialize values to ByteBuf
             ByteBuf buffer = Unpooled.buffer();
             for (int i = 0; i < values.size(); i++) {
-                buffer.writeBytes(values.get(i).ToByte());
+                ColumnMeta columnMeta = tableMeta.columns_list.get(i % columnSize);
+                writeFixedValue(buffer, values.get(i), columnMeta.len);
                 if ((columnSize == 1) || ((i + 1) % columnSize == 0 && i != 0)) {
                     fileHandle.InsertRecord(buffer);
                     buffer.clear();
@@ -53,6 +55,14 @@ public class InsertOperator implements PhysicalOperator {
         } catch (Exception e) {
             throw new RuntimeException(
                     "Failed to insert record: " + e.getMessage() + "\n");
+        }
+    }
+
+    private void writeFixedValue(ByteBuf buffer, Value value, int len) {
+        byte[] bytes = value.ToByte();
+        buffer.writeBytes(bytes, 0, Math.min(bytes.length, len));
+        for (int i = bytes.length; i < len; i++) {
+            buffer.writeByte(0);
         }
     }
 

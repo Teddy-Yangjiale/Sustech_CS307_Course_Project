@@ -61,6 +61,7 @@ public class UpdateOperator implements PhysicalOperator {
                 Value[] oldValues = tuple.getValues();
                 List<Value> newValues = new ArrayList<>(Arrays.asList(oldValues));
                 TabCol[] schema = tuple.getTupleSchema();
+                ArrayList<ColumnMeta> columnMetas = seqScanOperator.outputSchema();
 
                 for (int i = 0; i < this.updateSet.getColumns().size(); i++) {
                     String targetTable = updateSet.getColumn(i).getTableName();
@@ -81,15 +82,8 @@ public class UpdateOperator implements PhysicalOperator {
                     newValues.set(index, newValue);
                 }
                 ByteBuf buffer = Unpooled.buffer();
-                for (Value v : newValues) {
-                    String str = "";
-                    if (v.type == ValueType.CHAR) str = (String) v.value;
-                    if (str.length() == 64) {
-                        ByteBuffer temp = ByteBuffer.allocate(64);
-                        temp.put(str.getBytes());
-                        buffer.writeBytes(temp.array());
-                    }
-                    else buffer.writeBytes(v.ToByte());
+                for (int i = 0; i < newValues.size(); i++) {
+                    writeFixedValue(buffer, newValues.get(i), columnMetas.get(i).getLen());
                 }
 
                 fileHandle.UpdateRecord(tuple.getRID(), buffer);
@@ -145,5 +139,13 @@ public class UpdateOperator implements PhysicalOperator {
 
     public String getTableName() {
         return tableName;
+    }
+
+    private void writeFixedValue(ByteBuf buffer, Value value, int len) {
+        byte[] bytes = value.ToByte();
+        buffer.writeBytes(bytes, 0, Math.min(bytes.length, len));
+        for (int i = bytes.length; i < len; i++) {
+            buffer.writeByte(0);
+        }
     }
 }

@@ -12,8 +12,20 @@ import net.sf.jsqlparser.statement.ShowStatement;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.select.*;
 import net.sf.jsqlparser.statement.update.Update;
+import net.sf.jsqlparser.statement.alter.Alter;
 import net.sf.jsqlparser.statement.insert.Insert;
 import net.sf.jsqlparser.statement.create.table.CreateTable;
+import net.sf.jsqlparser.statement.delete.Delete;
+import net.sf.jsqlparser.statement.drop.Drop;
+import net.sf.jsqlparser.expression.Function;
+import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.BinaryExpression;
+import net.sf.jsqlparser.expression.Parenthesis;
+import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
+import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
+import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
+import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 
 import edu.sustech.cs307.exception.ExceptionTypes;
 import edu.sustech.cs307.logicalOperator.*;
@@ -34,12 +46,15 @@ public class LogicalPlanner {
             Pattern.compile("(?i)^ROLLBACK\\s+TO(?:\\s+SAVEPOINT)?\\s+([A-Za-z_][A-Za-z0-9_]*)$");
     private static final Pattern RELEASE_SAVEPOINT_PATTERN =
             Pattern.compile("(?i)^RELEASE(?:\\s+SAVEPOINT)?\\s+([A-Za-z_][A-Za-z0-9_]*)$");
+    private static final Pattern SHOW_TABLES_PATTERN = Pattern.compile("(?i)^SHOW\\s+TABLES$");
+    private static final Pattern DESCRIBE_TABLE_PATTERN =
+            Pattern.compile("(?i)^(?:DESCRIBE|DESC)\\s+([A-Za-z_][A-Za-z0-9_]*)$");
 
     public static LogicalOperator resolveAndPlan(DBManager dbManager, String sql) throws DBException {
         if (sql == null || sql.isBlank()) {
             return null;
         }
-        if (handleManualTransactionCommand(dbManager, sql)) {
+        if (handleManualCommand(dbManager, sql)) {
             return null;
         }
         JSqlParser parser = new CCJSqlParserManager();
@@ -57,16 +72,26 @@ public class LogicalPlanner {
             operator = handleInsert(dbManager, insertStmt);
         } else if (stmt instanceof Update updateStmt) {
             operator = handleUpdate(dbManager, updateStmt);
-        }else if (stmt instanceof Commit) {
+        } else if (stmt instanceof Delete deleteStmt) {
+            operator = handleDelete(dbManager, deleteStmt);
+        } else if (stmt instanceof Alter alterStmt) {
+            dbManager.alterTable(alterStmt);
+            return null;
+        } else if (stmt instanceof Commit) {
             dbManager.commitTransaction();
             return null;
         }
-        //todo: add condition of handleDelete
         // functional
         else if (stmt instanceof CreateTable createTableStmt) {
             CreateTableExecutor createTable = new CreateTableExecutor(createTableStmt, dbManager, sql);
             createTable.execute();
             return null;
+        } else if (stmt instanceof Drop dropStmt) {
+            if (dropStmt.getType().equalsIgnoreCase("TABLE")) {
+                dbManager.dropTable(dropStmt.getName().getName());
+                return null;
+            }
+            throw new DBException(ExceptionTypes.UnsupportedCommand(dropStmt.toString()));
         } else if (stmt instanceof ExplainStatement explainStatement) {
             ExplainExecutor explainExecutor = new ExplainExecutor(explainStatement, dbManager);
             explainExecutor.execute();
@@ -103,10 +128,82 @@ public class LogicalPlanner {
 
         // 在 Join 之后应用 Filter，Filter 的输入是 Join 的结果 (root)
         if (plainSelect.getWhere() != null) {
-            root = new LogicalFilterOperator(root, plainSelect.getWhere());
+            if (containsSubquery(plainSelect.getWhere())) {
+                root = new LogicalSubqueryFilterOperator(root, plainSelect.getWhere());
+            } else {
+                root = new LogicalFilterOperator(root, plainSelect.getWhere());
+            }
+        }
+        if (isAggregateQuery(plainSelect)) {
+            LogicalOperator aggregate = new LogicalAggregateOperator(
+                    root,
+                    plainSelect.getSelectItems(),
+                    groupByExpressions(plainSelect));
+            if (selectStmt.getOrderByElements() != null && !selectStmt.getOrderByElements().isEmpty()) {
+                aggregate = new LogicalOrderOperator(aggregate, selectStmt.getOrderByElements());
+            }
+            return aggregate;
+        }
+        if (selectStmt.getOrderByElements() != null && !selectStmt.getOrderByElements().isEmpty()) {
+            root = new LogicalOrderOperator(root, selectStmt.getOrderByElements());
         }
         root = new LogicalProjectOperator(root, plainSelect.getSelectItems());
         return root;
+    }
+
+    private static boolean isAggregateQuery(PlainSelect plainSelect) {
+        if (plainSelect.getGroupBy() != null) {
+            return true;
+        }
+        for (SelectItem<?> selectItem : plainSelect.getSelectItems()) {
+            if (selectItem.getExpression() instanceof Function function) {
+                String name = function.getName();
+                if (name.equalsIgnoreCase("count")
+                        || name.equalsIgnoreCase("max")
+                        || name.equalsIgnoreCase("min")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    @SuppressWarnings("deprecation")
+    private static java.util.List<Expression> groupByExpressions(PlainSelect plainSelect) {
+        if (plainSelect.getGroupBy() == null || plainSelect.getGroupBy().getGroupByExpressionList() == null) {
+            return java.util.List.of();
+        }
+        return plainSelect.getGroupBy().getGroupByExpressionList().getExpressions();
+    }
+
+    private static boolean containsSubquery(Expression expression) {
+        if (expression instanceof ParenthesedSelect) {
+            return true;
+        }
+        if (expression instanceof Parenthesis parenthesis) {
+            return containsSubquery(parenthesis.getExpression());
+        }
+        if (expression instanceof ExistsExpression existsExpression) {
+            return true;
+        }
+        if (expression instanceof InExpression inExpression) {
+            return inExpression.getRightExpression() instanceof ParenthesedSelect
+                    || containsSubquery(inExpression.getLeftExpression())
+                    || containsSubquery(inExpression.getRightExpression());
+        }
+        if (expression instanceof AndExpression andExpression) {
+            return containsSubquery(andExpression.getLeftExpression())
+                    || containsSubquery(andExpression.getRightExpression());
+        }
+        if (expression instanceof OrExpression orExpression) {
+            return containsSubquery(orExpression.getLeftExpression())
+                    || containsSubquery(orExpression.getRightExpression());
+        }
+        if (expression instanceof BinaryExpression binaryExpression) {
+            return containsSubquery(binaryExpression.getLeftExpression())
+                    || containsSubquery(binaryExpression.getRightExpression());
+        }
+        return false;
     }
 
     private static LogicalOperator handleInsert(DBManager dbManager, Insert insertStmt) {
@@ -119,6 +216,12 @@ public class LogicalPlanner {
         return new LogicalUpdateOperator(root, updateStmt.getTable().getName(), updateStmt.getUpdateSets(),
                 updateStmt.getWhere());
     }
+
+    private static LogicalOperator handleDelete(DBManager dbManager, Delete deleteStmt) throws DBException {
+        String tableName = deleteStmt.getTable().getName();
+        LogicalOperator root = new LogicalTableScanOperator(tableName, dbManager);
+        return new LogicalDeleteOperator(root, tableName, deleteStmt.getWhere());
+    }
     private static String normalizeSql(String sql) {
         String normalizedSql = sql == null ? "" : sql.trim();
         while (normalizedSql.endsWith(";")) {
@@ -127,7 +230,7 @@ public class LogicalPlanner {
         return normalizedSql;
     }
 
-    private static boolean handleManualTransactionCommand(DBManager dbManager, String sql) throws DBException {
+    private static boolean handleManualCommand(DBManager dbManager, String sql) throws DBException {
         String normalizedSql = normalizeSql(sql);
         if (BEGIN_PATTERN.matcher(normalizedSql).matches() || START_TRANSACTION_PATTERN.matcher(normalizedSql).matches()) {
             dbManager.beginTransaction();
@@ -154,6 +257,15 @@ public class LogicalPlanner {
         var releaseMatcher = RELEASE_SAVEPOINT_PATTERN.matcher(normalizedSql);
         if (releaseMatcher.matches()) {
             dbManager.releaseSavepoint(releaseMatcher.group(1));
+            return true;
+        }
+        if (SHOW_TABLES_PATTERN.matcher(normalizedSql).matches()) {
+            dbManager.showTables();
+            return true;
+        }
+        var describeMatcher = DESCRIBE_TABLE_PATTERN.matcher(normalizedSql);
+        if (describeMatcher.matches()) {
+            dbManager.descTable(describeMatcher.group(1));
             return true;
         }
         return false;

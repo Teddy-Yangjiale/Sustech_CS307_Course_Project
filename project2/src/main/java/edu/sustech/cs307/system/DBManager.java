@@ -9,13 +9,23 @@ import edu.sustech.cs307.storage.BufferPool;
 import edu.sustech.cs307.storage.DiskManager;
 import edu.sustech.cs307.storage.replacer.ClockReplacer;
 import edu.sustech.cs307.storage.replacer.PageReplacer;
+import edu.sustech.cs307.value.Value;
+import edu.sustech.cs307.value.ValueType;
+import edu.sustech.cs307.record.RecordFileHandle;
 import org.apache.commons.lang3.StringUtils;
 import org.pmw.tinylog.Logger;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import net.sf.jsqlparser.statement.alter.Alter;
+import net.sf.jsqlparser.statement.alter.AlterExpression;
+import net.sf.jsqlparser.statement.alter.AlterOperation;
+import net.sf.jsqlparser.statement.create.table.ColDataType;
 
 import java.io.File;
 import java.io.IOException;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.function.IntFunction;
 
 public class DBManager {
@@ -79,18 +89,194 @@ public class DBManager {
      * Each table name is displayed in a separate row within the ASCII borders.
      */
     public void showTables() {
-        throw new RuntimeException("Not implement");
-        //todo: complete show table
-        // | -- TABLE -- |
-        // | -- ${table} -- |
-        // | ----------- |
+        Logger.info("|-----------|");
+        Logger.info("|  Tables   |");
+        Logger.info("|-----------|");
+        for (String tableName : metaManager.getTableNames()) {
+            Logger.info("|{}|", StringUtils.center(tableName, 11));
+        }
+        Logger.info("|-----------|");
     }
 
-    public void descTable(String table_name) {
-        throw new RuntimeException("Not implemented yet");
-        //todo: complete describe table
-        // | -- TABLE Field -- | -- Column Type --|
-        // | --  ${table field} --| -- ${table type} --|
+    public void descTable(String table_name) throws DBException {
+        TableMeta tableMeta = metaManager.getTable(table_name);
+        Logger.info("Table: {}", tableMeta.tableName);
+        Logger.info("|---------------|---------------|");
+        Logger.info("|     Field     |     Type      |");
+        Logger.info("|---------------|---------------|");
+        for (ColumnMeta column : tableMeta.columns_list) {
+            Logger.info("|{}|{}|", StringUtils.center(column.name, 15), StringUtils.center(column.type.toString(), 15));
+        }
+        Logger.info("|---------------|---------------|");
+    }
+
+    public void alterTable(Alter alterStmt) throws DBException {
+        String tableName = alterStmt.getTable().getName();
+        if (!isTableExists(tableName)) {
+            throw new DBException(ExceptionTypes.TableDoesNotExist(tableName));
+        }
+        if (alterStmt.getAlterExpressions() == null || alterStmt.getAlterExpressions().size() != 1) {
+            throw new DBException(ExceptionTypes.UnsupportedCommand(alterStmt.toString()));
+        }
+        AlterExpression alterExpression = alterStmt.getAlterExpressions().get(0);
+        if (alterExpression.getOperation() == AlterOperation.ADD) {
+            for (AlterExpression.ColumnDataType columnDataType : alterExpression.getColDataTypeList()) {
+                addColumnAndRewrite(tableName, columnDataType.getColumnName(), columnDataType.getColDataType());
+            }
+            return;
+        }
+        if (alterExpression.getOperation() == AlterOperation.DROP) {
+            dropColumnAndRewrite(tableName, alterExpression.getColumnName());
+            return;
+        }
+        throw new DBException(ExceptionTypes.UnsupportedCommand(alterStmt.toString()));
+    }
+
+    private void addColumnAndRewrite(String tableName, String columnName, ColDataType colDataType) throws DBException {
+        TableMeta oldMeta = metaManager.getTable(tableName);
+        if (oldMeta.hasColumn(columnName)) {
+            throw new DBException(ExceptionTypes.ColumnAlreadyExist(columnName));
+        }
+        ArrayList<Value[]> oldRows = readAllRows(tableName);
+        ArrayList<ColumnMeta> newColumns = copyColumns(oldMeta.columns_list);
+        int offset = recordSize(newColumns);
+        newColumns.add(new ColumnMeta(tableName, columnName, valueType(colDataType), valueLength(colDataType), offset));
+        rewriteTable(tableName, newColumns, oldRows, null, defaultValue(valueType(colDataType)));
+        Logger.info("Successfully altered table {} add column {}", tableName, columnName);
+    }
+
+    private void dropColumnAndRewrite(String tableName, String columnName) throws DBException {
+        TableMeta oldMeta = metaManager.getTable(tableName);
+        int dropIndex = -1;
+        for (int i = 0; i < oldMeta.columns_list.size(); i++) {
+            if (oldMeta.columns_list.get(i).name.equalsIgnoreCase(columnName)) {
+                dropIndex = i;
+                break;
+            }
+        }
+        if (dropIndex < 0) {
+            throw new DBException(ExceptionTypes.ColumnDoesNotExist(columnName));
+        }
+        ArrayList<Value[]> oldRows = readAllRows(tableName);
+        ArrayList<ColumnMeta> newColumns = new ArrayList<>();
+        int offset = 0;
+        for (ColumnMeta column : oldMeta.columns_list) {
+            if (column.name.equalsIgnoreCase(columnName)) {
+                continue;
+            }
+            newColumns.add(new ColumnMeta(tableName, column.name, column.type, column.len, offset));
+            offset += column.len;
+        }
+        rewriteTable(tableName, newColumns, oldRows, dropIndex, null);
+        Logger.info("Successfully altered table {} drop column {}", tableName, columnName);
+    }
+
+    private ArrayList<Value[]> readAllRows(String tableName) throws DBException {
+        ArrayList<Value[]> rows = new ArrayList<>();
+        edu.sustech.cs307.physicalOperator.SeqScanOperator scanner =
+                new edu.sustech.cs307.physicalOperator.SeqScanOperator(tableName, this);
+        scanner.Begin();
+        while (scanner.hasNext()) {
+            scanner.Next();
+            if (scanner.Current() != null) {
+                rows.add(scanner.Current().getValues());
+            }
+        }
+        scanner.Close();
+        return rows;
+    }
+
+    private void rewriteTable(String tableName, ArrayList<ColumnMeta> newColumns, ArrayList<Value[]> oldRows,
+                              Integer dropIndex, Value appendedValue) throws DBException {
+        String dataFile = String.format("%s/%s", tableName, "data");
+        bufferPool.DeleteAllPages(dataFile);
+        bufferPool.Reset();
+        diskManager.DeleteFile(dataFile);
+        recordManager.CreateFile(dataFile, recordSize(newColumns));
+        metaManager.dropTable(tableName);
+        metaManager.createTable(new TableMeta(tableName, newColumns));
+        RecordFileHandle fileHandle = recordManager.OpenFile(tableName);
+        for (Value[] oldRow : oldRows) {
+            ByteBuf buffer = Unpooled.buffer();
+            int oldIndex = 0;
+            for (ColumnMeta column : newColumns) {
+                Value value;
+                if (appendedValue != null && oldIndex >= oldRow.length) {
+                    value = appendedValue;
+                } else {
+                    while (dropIndex != null && oldIndex == dropIndex) {
+                        oldIndex++;
+                    }
+                    value = oldIndex < oldRow.length ? oldRow[oldIndex++] : defaultValue(column.type);
+                }
+                writeFixedValue(buffer, value, column.len);
+            }
+            fileHandle.InsertRecord(buffer);
+        }
+        recordManager.CloseFile(fileHandle);
+        persistRuntimeState();
+    }
+
+    private ArrayList<ColumnMeta> copyColumns(List<ColumnMeta> columns) {
+        ArrayList<ColumnMeta> result = new ArrayList<>();
+        int offset = 0;
+        for (ColumnMeta column : columns) {
+            result.add(new ColumnMeta(column.tableName, column.name, column.type, column.len, offset));
+            offset += column.len;
+        }
+        return result;
+    }
+
+    private int recordSize(List<ColumnMeta> columns) {
+        int size = 0;
+        for (ColumnMeta column : columns) {
+            size += column.len;
+        }
+        return size;
+    }
+
+    private ValueType valueType(ColDataType colDataType) throws DBException {
+        if (colDataType.getDataType().equalsIgnoreCase("char")) {
+            return ValueType.CHAR;
+        }
+        if (colDataType.getDataType().equalsIgnoreCase("int")) {
+            return ValueType.INTEGER;
+        }
+        if (colDataType.getDataType().equalsIgnoreCase("float")) {
+            return ValueType.FLOAT;
+        }
+        throw new DBException(ExceptionTypes.UnsupportedCommand(colDataType.toString()));
+    }
+
+    private int valueLength(ColDataType colDataType) throws DBException {
+        ValueType type = valueType(colDataType);
+        if (type == ValueType.CHAR) {
+            return Value.CHAR_SIZE;
+        }
+        if (type == ValueType.INTEGER) {
+            return Value.INT_SIZE;
+        }
+        if (type == ValueType.FLOAT) {
+            return Value.FLOAT_SIZE;
+        }
+        throw new DBException(ExceptionTypes.UnsupportedCommand(colDataType.toString()));
+    }
+
+    private Value defaultValue(ValueType type) {
+        return switch (type) {
+            case CHAR -> new Value("");
+            case INTEGER -> new Value(0L);
+            case FLOAT -> new Value(0.0);
+            default -> new Value("");
+        };
+    }
+
+    private void writeFixedValue(ByteBuf buffer, Value value, int len) {
+        byte[] bytes = value.ToByte();
+        buffer.writeBytes(bytes, 0, Math.min(bytes.length, len));
+        for (int i = bytes.length; i < len; i++) {
+            buffer.writeByte(0);
+        }
     }
 
     /**
@@ -128,7 +314,19 @@ public class DBManager {
      *                     errors during deletion
      */
     public void dropTable(String table_name) throws DBException {
-        // todo: finish drop table method
+        if (!isTableExists(table_name)) {
+            throw new DBException(ExceptionTypes.TableDoesNotExist(table_name));
+        }
+        bufferPool.DeleteAllPages(String.format("%s/%s", table_name, "data"));
+        bufferPool.Reset();
+        metaManager.dropTable(table_name);
+        diskManager.DeleteFile(String.format("%s/%s", table_name, "data"));
+        File tableDir = new File(String.format("%s/%s", diskManager.getCurrentDir(), table_name));
+        if (tableDir.exists()) {
+            deleteDirectory(tableDir);
+        }
+        persistRuntimeState();
+        Logger.info("Successfully dropped table: {}", table_name);
     }
 
     /**

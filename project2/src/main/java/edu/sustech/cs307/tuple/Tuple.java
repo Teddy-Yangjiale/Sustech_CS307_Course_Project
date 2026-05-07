@@ -9,6 +9,8 @@ import edu.sustech.cs307.value.ValueType;
 import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
+import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import net.sf.jsqlparser.expression.operators.relational.InExpression;
 import net.sf.jsqlparser.schema.Column;
 
 public abstract class Tuple {
@@ -23,16 +25,40 @@ public abstract class Tuple {
     }
 
     private boolean evaluateCondition(Tuple tuple, Expression whereExpr) {
-        //todo: add Or condition
         if (whereExpr instanceof AndExpression andExpr) {
-            // Recursively evaluate left and right expressions
             return evaluateCondition(tuple, andExpr.getLeftExpression())
                     && evaluateCondition(tuple, andExpr.getRightExpression());
+        } else if (whereExpr instanceof OrExpression orExpr) {
+            return evaluateCondition(tuple, orExpr.getLeftExpression())
+                    || evaluateCondition(tuple, orExpr.getRightExpression());
+        } else if (whereExpr instanceof Parenthesis parenthesis) {
+            return evaluateCondition(tuple, parenthesis.getExpression());
+        } else if (whereExpr instanceof InExpression inExpression) {
+            return evaluateInExpression(tuple, inExpression);
         } else if (whereExpr instanceof BinaryExpression binaryExpression) {
             return evaluateBinaryExpression(tuple, binaryExpression);
         } else {
             return true; // For non-binary and non-AND expressions, just return true for now
         }
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean evaluateInExpression(Tuple tuple, InExpression inExpression) {
+        try {
+            Value leftValue = tuple.evaluateExpression(inExpression.getLeftExpression());
+            Expression rightExpression = inExpression.getRightExpression();
+            if (rightExpression instanceof ExpressionList<?> expressionList) {
+                for (Expression expression : expressionList.getExpressions()) {
+                    if (ValueComparer.compare(leftValue, tuple.evaluateExpression(expression)) == 0) {
+                        return !inExpression.isNot();
+                    }
+                }
+                return inExpression.isNot();
+            }
+        } catch (DBException e) {
+            e.printStackTrace();
+        }
+        return false;
     }
 
     private boolean evaluateBinaryExpression(Tuple tuple, BinaryExpression binaryExpr) {
@@ -78,7 +104,18 @@ public abstract class Tuple {
             if (operator.equals("=")) {
                 return comparisonResult == 0;
             }
-            // todo: finish condition > < >= <=
+            if (operator.equals(">")) {
+                return comparisonResult > 0;
+            }
+            if (operator.equals(">=")) {
+                return comparisonResult >= 0;
+            }
+            if (operator.equals("<")) {
+                return comparisonResult < 0;
+            }
+            if (operator.equals("<=")) {
+                return comparisonResult <= 0;
+            }
 
         } catch (DBException e) {
             e.printStackTrace(); // Handle exception properly
@@ -104,8 +141,9 @@ public abstract class Tuple {
             return new Value(((DoubleValue) expr).getValue(), ValueType.FLOAT);
         } else if (expr instanceof LongValue) {
             return new Value(((LongValue) expr).getValue(), ValueType.INTEGER);
-        } else if (expr instanceof Column) {
-            Column col = (Column) expr;
+        } else if (expr instanceof Parenthesis parenthesis) {
+            return evaluateExpression(parenthesis.getExpression());
+        } else if (expr instanceof Column col) {
             return getValue(new TabCol(col.getTableName(), col.getColumnName()));
         } else {
             throw new DBException(ExceptionTypes.UnsupportedExpression(expr));

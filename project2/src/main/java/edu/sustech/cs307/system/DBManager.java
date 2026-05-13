@@ -256,13 +256,15 @@ public class DBManager {
     }
 
     private ValueType valueType(ColDataType colDataType) throws DBException {
-        if (colDataType.getDataType().equalsIgnoreCase("char")) {
+        if (colDataType.getDataType().equalsIgnoreCase("char")
+                || colDataType.getDataType().equalsIgnoreCase("varchar")) {
             return ValueType.CHAR;
         }
         if (colDataType.getDataType().equalsIgnoreCase("int")) {
             return ValueType.INTEGER;
         }
-        if (colDataType.getDataType().equalsIgnoreCase("float")) {
+        if (colDataType.getDataType().equalsIgnoreCase("float")
+                || colDataType.getDataType().equalsIgnoreCase("double")) {
             return ValueType.FLOAT;
         }
         throw new DBException(ExceptionTypes.UnsupportedCommand(colDataType.toString()));

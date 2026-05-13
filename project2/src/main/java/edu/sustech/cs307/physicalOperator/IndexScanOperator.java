@@ -22,7 +22,8 @@ public class IndexScanOperator implements PhysicalOperator {
         LESS_THAN,
         LESS_THAN_OR_EQUAL,
         GREATER_THAN,
-        GREATER_THAN_OR_EQUAL
+        GREATER_THAN_OR_EQUAL,
+        RANGE
     }
 
     private final DBManager dbManager;
@@ -30,6 +31,9 @@ public class IndexScanOperator implements PhysicalOperator {
     private final IndexMeta indexMeta;
     private final PredicateType predicateType;
     private final Value value;
+    private final Value highValue;
+    private final boolean leftEqual;
+    private final boolean rightEqual;
     private TableMeta tableMeta;
     private RecordFileHandle fileHandle;
     private List<RID> rids;
@@ -39,11 +43,25 @@ public class IndexScanOperator implements PhysicalOperator {
 
     public IndexScanOperator(DBManager dbManager, String tableName, IndexMeta indexMeta,
                              PredicateType predicateType, Value value) {
+        this(dbManager, tableName, indexMeta, predicateType, value, null, false, false);
+    }
+
+    public IndexScanOperator(DBManager dbManager, String tableName, IndexMeta indexMeta,
+                             Value value, Value highValue, boolean leftEqual, boolean rightEqual) {
+        this(dbManager, tableName, indexMeta, PredicateType.RANGE, value, highValue, leftEqual, rightEqual);
+    }
+
+    private IndexScanOperator(DBManager dbManager, String tableName, IndexMeta indexMeta,
+                              PredicateType predicateType, Value value,
+                              Value highValue, boolean leftEqual, boolean rightEqual) {
         this.dbManager = dbManager;
         this.tableName = tableName;
         this.indexMeta = indexMeta;
         this.predicateType = predicateType;
         this.value = value;
+        this.highValue = highValue;
+        this.leftEqual = leftEqual;
+        this.rightEqual = rightEqual;
         try {
             this.tableMeta = dbManager.getMetaManager().getTable(tableName);
         } catch (DBException e) {
@@ -66,6 +84,7 @@ public class IndexScanOperator implements PhysicalOperator {
             case LESS_THAN_OR_EQUAL -> index.lessThan(value, true);
             case GREATER_THAN -> index.moreThan(value, false);
             case GREATER_THAN_OR_EQUAL -> index.moreThan(value, true);
+            case RANGE -> index.range(value, highValue, leftEqual, rightEqual);
         };
         this.fileHandle = dbManager.getRecordManager().OpenFile(tableName);
         this.cursor = 0;

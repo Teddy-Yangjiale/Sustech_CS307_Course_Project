@@ -17,6 +17,7 @@ import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.StringValue;
+import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
@@ -65,8 +66,19 @@ public class PhysicalPlanner {
             IndexedPredicate indexedPredicate = extractIndexedPredicate(dbManager, tableScanOperator.getTableName(),
                     logicalFilterOp.getWhereExpr());
             if (indexedPredicate != null) {
-                return new IndexScanOperator(dbManager, tableScanOperator.getTableName(), indexedPredicate.indexMeta,
-                        indexedPredicate.predicateType, indexedPredicate.value);
+                PhysicalOperator scanOp;
+                if (indexedPredicate.predicateType == IndexScanOperator.PredicateType.RANGE) {
+                    scanOp = new IndexScanOperator(dbManager, tableScanOperator.getTableName(),
+                            indexedPredicate.indexMeta, indexedPredicate.value,
+                            indexedPredicate.highValue, indexedPredicate.leftEqual, indexedPredicate.rightEqual);
+                } else {
+                    scanOp = new IndexScanOperator(dbManager, tableScanOperator.getTableName(),
+                            indexedPredicate.indexMeta, indexedPredicate.predicateType, indexedPredicate.value);
+                }
+                if (logicalFilterOp.getWhereExpr() instanceof AndExpression) {
+                    return new FilterOperator(scanOp, logicalFilterOp.getWhereExpr());
+                }
+                return scanOp;
             }
         }
         PhysicalOperator inputOp = generateOperator(dbManager, logicalFilterOp.getChild());
@@ -96,10 +108,32 @@ public class PhysicalPlanner {
         return new ProjectOperator(inputOp, logicalProjectOp.getOutputSchema());
     }
 
-    private record IndexedPredicate(IndexMeta indexMeta, IndexScanOperator.PredicateType predicateType, Value value) {
+    private record IndexedPredicate(IndexMeta indexMeta, IndexScanOperator.PredicateType predicateType,
+                                    Value value, Value highValue, boolean leftEqual, boolean rightEqual) {
+        IndexedPredicate(IndexMeta indexMeta, IndexScanOperator.PredicateType predicateType, Value value) {
+            this(indexMeta, predicateType, value, null, false, false);
+        }
     }
 
     private static IndexedPredicate extractIndexedPredicate(DBManager dbManager, String tableName, Expression expression)
+            throws DBException {
+        expression = unwrapParenthesis(expression);
+        if (expression instanceof AndExpression andExpr) {
+            IndexedPredicate merged = tryMergeRange(dbManager, tableName,
+                    andExpr.getLeftExpression(), andExpr.getRightExpression());
+            if (merged != null) {
+                return merged;
+            }
+            IndexedPredicate left = extractIndexedPredicate(dbManager, tableName, andExpr.getLeftExpression());
+            if (left != null) {
+                return left;
+            }
+            return extractIndexedPredicate(dbManager, tableName, andExpr.getRightExpression());
+        }
+        return extractSimplePredicate(dbManager, tableName, expression);
+    }
+
+    private static IndexedPredicate extractSimplePredicate(DBManager dbManager, String tableName, Expression expression)
             throws DBException {
         expression = unwrapParenthesis(expression);
         if (!(expression instanceof BinaryExpression binaryExpression)) {
@@ -128,6 +162,115 @@ public class PhysicalPlanner {
             return null;
         }
         return new IndexedPredicate(indexMeta, predicateType(operator, columnOnLeft), value);
+    }
+
+    private static IndexedPredicate tryMergeRange(DBManager dbManager, String tableName,
+                                                   Expression left, Expression right) throws DBException {
+        String[] leftInfo = classifyComparison(tableName, left);
+        String[] rightInfo = classifyComparison(tableName, right);
+        if (leftInfo == null || rightInfo == null) {
+            return null;
+        }
+        String leftCol = leftInfo[0], leftOp = leftInfo[1];
+        String rightCol = rightInfo[0], rightOp = rightInfo[1];
+        if (!leftCol.equalsIgnoreCase(rightCol)) {
+            return null;
+        }
+        IndexMeta indexMeta = dbManager.findIndexOnColumn(tableName, leftCol);
+        if (indexMeta == null) {
+            return null;
+        }
+        Value leftVal = constantForComparison((BinaryExpression) left);
+        Value rightVal = constantForComparison((BinaryExpression) right);
+        if (leftVal == null || rightVal == null) {
+            return null;
+        }
+        String[] lower = findLowerBound(leftOp, leftVal, rightOp, rightVal);
+        String[] upper = findUpperBound(leftOp, leftVal, rightOp, rightVal);
+        if (lower == null || upper == null) {
+            return null;
+        }
+        return new IndexedPredicate(indexMeta, IndexScanOperator.PredicateType.RANGE,
+                lower[0].equals("left") ? leftVal : rightVal,
+                upper[0].equals("left") ? leftVal : rightVal,
+                lower[1].equals("eq"), upper[1].equals("eq"));
+    }
+
+    private static Value constantForComparison(BinaryExpression binaryExpression) {
+        Expression left = unwrapParenthesis(binaryExpression.getLeftExpression());
+        Expression right = unwrapParenthesis(binaryExpression.getRightExpression());
+        if (left instanceof Column) {
+            return constantValue(right);
+        }
+        return constantValue(left);
+    }
+
+    private static String[] classifyComparison(String tableName, Expression expression) {
+        expression = unwrapParenthesis(expression);
+        if (!(expression instanceof BinaryExpression binaryExpr)) {
+            return null;
+        }
+        String operator = binaryExpr.getStringExpression();
+        if (!operator.equals("=") && !operator.equals(">") && !operator.equals(">=")
+                && !operator.equals("<") && !operator.equals("<=")) {
+            return null;
+        }
+        Expression left = unwrapParenthesis(binaryExpr.getLeftExpression());
+        Expression right = unwrapParenthesis(binaryExpr.getRightExpression());
+        boolean columnOnLeft = left instanceof Column && constantValue(right) != null;
+        boolean columnOnRight = right instanceof Column && constantValue(left) != null;
+        if (!columnOnLeft && !columnOnRight) {
+            return null;
+        }
+        Column column = (Column) (columnOnLeft ? left : right);
+        String predicateTable = column.getTableName();
+        if (predicateTable != null && !predicateTable.isBlank() && !predicateTable.equalsIgnoreCase(tableName)) {
+            return null;
+        }
+        if (columnOnLeft) {
+            return new String[]{column.getColumnName(), operator};
+        }
+        return new String[]{column.getColumnName(), flipOperator(operator)};
+    }
+
+    private static String flipOperator(String operator) {
+        return switch (operator) {
+            case ">" -> "<";
+            case ">=" -> "<=";
+            case "<" -> ">";
+            case "<=" -> ">=";
+            default -> operator;
+        };
+    }
+
+    private static String[] findLowerBound(String op1, Value v1, String op2, Value v2) {
+        boolean isLower1 = op1.equals(">") || op1.equals(">=");
+        boolean isLower2 = op2.equals(">") || op2.equals(">=");
+        if (isLower1 && isLower2) {
+            return null;
+        }
+        if (isLower1) {
+            return new String[]{"left", op1.equals(">=") ? "eq" : "noeq"};
+        }
+        if (isLower2) {
+            return new String[]{"right", op2.equals(">=") ? "eq" : "noeq"};
+        }
+        return null;
+    }
+
+    private static String[] findUpperBound(String op1, Value v1, String op2, Value v2) {
+        boolean isUpper1 = op1.equals("<") || op1.equals("<=");
+        boolean isUpper2 = op2.equals("<") || op2.equals("<=");
+        if (isUpper1 && isUpper2) {
+            return null;
+        }
+        if (isUpper1) {
+            return new String[]{"left", op1.equals("<=") ? "eq" : "noeq"};
+        }
+        if (isUpper2) {
+            return new String[]{"right", op2.equals("<=") ? "eq" : "noeq"};
+        }
+        return null;
     }
 
     private static Expression unwrapParenthesis(Expression expression) {

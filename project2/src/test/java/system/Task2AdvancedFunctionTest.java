@@ -97,6 +97,19 @@ class Task2AdvancedFunctionTest {
         assertThat(selectFirstColumn(dbManager,
                 "select students.id from students where students.age >= 20 order by students.id"))
                 .containsExactly(3L, 4L);
+
+        executeStatement(dbManager, "drop table students");
+        executeStatement(dbManager, "drop table scores");
+        executeStatement(dbManager, "create table students(id int, age int)");
+        executeStatement(dbManager, "create table scores(id int, score int)");
+        executeStatement(dbManager, "insert into students (id, age) values (1, 18)");
+        executeStatement(dbManager, "insert into students (id, age) values (2, 19)");
+        executeStatement(dbManager, "insert into students (id, age) values (3, 20)");
+        executeStatement(dbManager, "insert into scores (id, score) values (1, 80)");
+
+        assertThat(selectFirstColumn(dbManager,
+                "select students.id from students where students.id not in (select scores.id from scores) order by students.id"))
+                .containsExactly(2L, 3L);
     }
 
     private DBManager buildDbManager() throws DBException {

@@ -42,6 +42,7 @@ public class DeleteOperator implements PhysicalOperator {
             TableTuple tuple = (TableTuple) seqScanOperator.Current();
             if (tuple != null && (whereExpr == null || tuple.eval_expr(whereExpr))) {
                 fileHandle.DeleteRecord(tuple.getRID());
+                seqScanOperator.getDbManager().deleteIndexEntries(tuple.getTableName(), tuple.getRID(), tuple.getValues());
                 deleteCount++;
             }
         }

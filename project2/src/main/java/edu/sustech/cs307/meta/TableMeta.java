@@ -17,7 +17,7 @@ public class TableMeta {
     @JsonIgnore
     public Map<String, ColumnMeta> columns; // 列名 -> 列的元数据
 
-    private Map<String, IndexType> indexes; // 索引信息
+    private Map<String, IndexMeta> indexes; // 索引名 -> 索引元数据
 
     private Map<String, Integer> column_rank;
 
@@ -43,11 +43,11 @@ public class TableMeta {
     }
 
     @JsonCreator
-    public TableMeta(@JsonProperty("tableName") String tableName, @JsonProperty("columns_list") ArrayList<ColumnMeta> columns_list, @JsonProperty("indexes")  Map<String, IndexType> indexes) {
+    public TableMeta(@JsonProperty("tableName") String tableName, @JsonProperty("columns_list") ArrayList<ColumnMeta> columns_list, @JsonProperty("indexes")  Map<String, IndexMeta> indexes) {
         this.tableName = tableName;
         this.columns_list = columns_list;
         this.columns = new HashMap<>();
-        this.indexes = indexes;
+        this.indexes = indexes == null ? new HashMap<>() : indexes;
         for (var column : columns_list) {
             this.columns.put(column.name, column);
         }
@@ -93,11 +93,35 @@ public class TableMeta {
         return this.columns.containsKey(columnName);
     }
 
-    public Map<String, IndexType> getIndexes() {
+    public Map<String, IndexMeta> getIndexes() {
         return indexes;
     }
 
-    public void setIndexes(Map<String, IndexType> indexes) {
-        this.indexes = indexes;
+    public void setIndexes(Map<String, IndexMeta> indexes) {
+        this.indexes = indexes == null ? new HashMap<>() : indexes;
+    }
+
+    public void addIndex(IndexMeta indexMeta) throws DBException {
+        if (indexes.containsKey(indexMeta.indexName)) {
+            throw new DBException(ExceptionTypes.InvalidSQL(indexMeta.indexName, "Index already exists"));
+        }
+        indexes.put(indexMeta.indexName, indexMeta);
+    }
+
+    public IndexMeta dropIndex(String indexName) throws DBException {
+        IndexMeta removed = indexes.remove(indexName);
+        if (removed == null) {
+            throw new DBException(ExceptionTypes.InvalidSQL(indexName, "Index does not exist"));
+        }
+        return removed;
+    }
+
+    public IndexMeta findIndexOnColumn(String columnName) {
+        for (IndexMeta indexMeta : indexes.values()) {
+            if (indexMeta.columnName.equalsIgnoreCase(columnName)) {
+                return indexMeta;
+            }
+        }
+        return null;
     }
 }

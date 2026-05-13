@@ -8,14 +8,18 @@ import edu.sustech.cs307.system.DBManager;
 import edu.sustech.cs307.value.Value;
 import edu.sustech.cs307.value.ValueType;
 import edu.sustech.cs307.meta.ColumnMeta;
+import edu.sustech.cs307.meta.IndexMeta;
 import edu.sustech.cs307.meta.TableMeta;
 
+import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.DoubleValue;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.LongValue;
+import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
+import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.select.Values;
 
 import java.util.ArrayList;
@@ -52,26 +56,19 @@ public class PhysicalPlanner {
     }
 
     private static PhysicalOperator handleTableScan(DBManager dbManager, LogicalTableScanOperator logicalTableScanOp) {
-        String tableName = logicalTableScanOp.getTableName();
-        TableMeta tableMeta;
-        try {
-            tableMeta = dbManager.getMetaManager().getTable(tableName);
-        } catch (DBException e) {
-            // Fallback to SeqScan if TableMeta cannot be retrieved
-            return new SeqScanOperator(tableName, dbManager);
-        }
-
-        // Check if index exists for the table (for now, assume RBTreeIndex always
-        // exists if index is defined)
-        if (tableMeta.getIndexes() != null && !tableMeta.getIndexes().isEmpty()) {
-            throw new RuntimeException("unimplement");
-        } else {
-            return new SeqScanOperator(tableName, dbManager);
-        }
+        return new SeqScanOperator(logicalTableScanOp.getTableName(), dbManager);
     }
 
     private static PhysicalOperator handleFilter(DBManager dbManager, LogicalFilterOperator logicalFilterOp)
             throws DBException {
+        if (logicalFilterOp.getChild() instanceof LogicalTableScanOperator tableScanOperator) {
+            IndexedPredicate indexedPredicate = extractIndexedPredicate(dbManager, tableScanOperator.getTableName(),
+                    logicalFilterOp.getWhereExpr());
+            if (indexedPredicate != null) {
+                return new IndexScanOperator(dbManager, tableScanOperator.getTableName(), indexedPredicate.indexMeta,
+                        indexedPredicate.predicateType, indexedPredicate.value);
+            }
+        }
         PhysicalOperator inputOp = generateOperator(dbManager, logicalFilterOp.getChild());
         return new FilterOperator(inputOp, logicalFilterOp.getWhereExpr());
     }
@@ -97,6 +94,83 @@ public class PhysicalPlanner {
             return new CountOperator(inputOp);
         }
         return new ProjectOperator(inputOp, logicalProjectOp.getOutputSchema());
+    }
+
+    private record IndexedPredicate(IndexMeta indexMeta, IndexScanOperator.PredicateType predicateType, Value value) {
+    }
+
+    private static IndexedPredicate extractIndexedPredicate(DBManager dbManager, String tableName, Expression expression)
+            throws DBException {
+        expression = unwrapParenthesis(expression);
+        if (!(expression instanceof BinaryExpression binaryExpression)) {
+            return null;
+        }
+        String operator = binaryExpression.getStringExpression();
+        if (!operator.equals("=") && !operator.equals(">") && !operator.equals(">=")
+                && !operator.equals("<") && !operator.equals("<=")) {
+            return null;
+        }
+        Expression left = unwrapParenthesis(binaryExpression.getLeftExpression());
+        Expression right = unwrapParenthesis(binaryExpression.getRightExpression());
+        boolean columnOnLeft = left instanceof Column && constantValue(right) != null;
+        boolean columnOnRight = right instanceof Column && constantValue(left) != null;
+        if (!columnOnLeft && !columnOnRight) {
+            return null;
+        }
+        Column column = (Column) (columnOnLeft ? left : right);
+        String predicateTable = column.getTableName();
+        if (predicateTable != null && !predicateTable.isBlank() && !predicateTable.equalsIgnoreCase(tableName)) {
+            return null;
+        }
+        Value value = constantValue(columnOnLeft ? right : left);
+        IndexMeta indexMeta = dbManager.findIndexOnColumn(tableName, column.getColumnName());
+        if (indexMeta == null) {
+            return null;
+        }
+        return new IndexedPredicate(indexMeta, predicateType(operator, columnOnLeft), value);
+    }
+
+    private static Expression unwrapParenthesis(Expression expression) {
+        while (expression instanceof Parenthesis parenthesis) {
+            expression = parenthesis.getExpression();
+        }
+        return expression;
+    }
+
+    private static Value constantValue(Expression expression) {
+        expression = unwrapParenthesis(expression);
+        if (expression instanceof StringValue stringValue) {
+            return new Value(stringValue.getValue(), ValueType.CHAR);
+        }
+        if (expression instanceof DoubleValue doubleValue) {
+            return new Value(doubleValue.getValue(), ValueType.FLOAT);
+        }
+        if (expression instanceof LongValue longValue) {
+            return new Value(longValue.getValue(), ValueType.INTEGER);
+        }
+        return null;
+    }
+
+    private static IndexScanOperator.PredicateType predicateType(String operator, boolean columnOnLeft) {
+        if (operator.equals("=")) {
+            return IndexScanOperator.PredicateType.EQUAL;
+        }
+        if (columnOnLeft) {
+            return switch (operator) {
+                case ">" -> IndexScanOperator.PredicateType.GREATER_THAN;
+                case ">=" -> IndexScanOperator.PredicateType.GREATER_THAN_OR_EQUAL;
+                case "<" -> IndexScanOperator.PredicateType.LESS_THAN;
+                case "<=" -> IndexScanOperator.PredicateType.LESS_THAN_OR_EQUAL;
+                default -> throw new IllegalArgumentException(operator);
+            };
+        }
+        return switch (operator) {
+            case ">" -> IndexScanOperator.PredicateType.LESS_THAN;
+            case ">=" -> IndexScanOperator.PredicateType.LESS_THAN_OR_EQUAL;
+            case "<" -> IndexScanOperator.PredicateType.GREATER_THAN;
+            case "<=" -> IndexScanOperator.PredicateType.GREATER_THAN_OR_EQUAL;
+            default -> throw new IllegalArgumentException(operator);
+        };
     }
 
     /**

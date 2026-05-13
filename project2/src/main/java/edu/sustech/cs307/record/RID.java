@@ -13,4 +13,25 @@ public class RID {
         this.pageNum = rid.pageNum;
         this.slotNum = rid.slotNum;
     }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (!(obj instanceof RID other)) {
+            return false;
+        }
+        return pageNum == other.pageNum && slotNum == other.slotNum;
+    }
+
+    @Override
+    public int hashCode() {
+        return 31 * pageNum + slotNum;
+    }
+
+    @Override
+    public String toString() {
+        return String.format("RID(%d,%d)", pageNum, slotNum);
+    }
 }

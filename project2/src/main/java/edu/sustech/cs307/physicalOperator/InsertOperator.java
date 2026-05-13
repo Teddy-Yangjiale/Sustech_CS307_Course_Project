@@ -8,6 +8,7 @@ import edu.sustech.cs307.tuple.TempTuple;
 import edu.sustech.cs307.tuple.Tuple;
 import edu.sustech.cs307.value.Value;
 import edu.sustech.cs307.value.ValueType;
+import edu.sustech.cs307.record.RID;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 
@@ -47,7 +48,13 @@ public class InsertOperator implements PhysicalOperator {
                 ColumnMeta columnMeta = tableMeta.columns_list.get(i % columnSize);
                 writeFixedValue(buffer, values.get(i), columnMeta.len);
                 if ((columnSize == 1) || ((i + 1) % columnSize == 0 && i != 0)) {
-                    fileHandle.InsertRecord(buffer);
+                    RID rid = fileHandle.InsertRecord(buffer);
+                    int rowStart = i + 1 - columnSize;
+                    Value[] rowValues = new Value[columnSize];
+                    for (int j = 0; j < columnSize; j++) {
+                        rowValues[j] = values.get(rowStart + j);
+                    }
+                    dbManager.insertIndexEntries(data_file, rid, rowValues);
                     buffer.clear();
                 }
             }

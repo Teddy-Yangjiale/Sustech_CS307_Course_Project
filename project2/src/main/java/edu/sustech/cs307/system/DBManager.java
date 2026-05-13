@@ -2,9 +2,13 @@ package edu.sustech.cs307.system;
 
 import edu.sustech.cs307.exception.DBException;
 import edu.sustech.cs307.exception.ExceptionTypes;
+import edu.sustech.cs307.index.InMemoryOrderedIndex;
 import edu.sustech.cs307.meta.ColumnMeta;
+import edu.sustech.cs307.meta.IndexMeta;
 import edu.sustech.cs307.meta.MetaManager;
+import edu.sustech.cs307.meta.TabCol;
 import edu.sustech.cs307.meta.TableMeta;
+import edu.sustech.cs307.record.RID;
 import edu.sustech.cs307.storage.BufferPool;
 import edu.sustech.cs307.storage.DiskManager;
 import edu.sustech.cs307.storage.replacer.ClockReplacer;
@@ -25,7 +29,9 @@ import java.io.File;
 import java.io.IOException;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.IntFunction;
 
 public class DBManager {
@@ -36,6 +42,7 @@ public class DBManager {
     private final RecordManager recordManager;
     private TransactionManager transactionManager;
     private final IntFunction<PageReplacer> replacerFactory;
+    private final Map<String, InMemoryOrderedIndex> runtimeIndexes;
 
     public DBManager(DiskManager diskManager, BufferPool bufferPool, RecordManager recordManager,
                      MetaManager metaManager) {
@@ -51,6 +58,7 @@ public class DBManager {
         this.metaManager = metaManager;
         this.replacerFactory = replacerFactory;
         this.transactionManager = transactionManager == null ? new TransactionManager(this) : transactionManager;
+        this.runtimeIndexes = new HashMap<>();
     }
 
     public TransactionManager getTransactionManager() {
@@ -188,13 +196,24 @@ public class DBManager {
 
     private void rewriteTable(String tableName, ArrayList<ColumnMeta> newColumns, ArrayList<Value[]> oldRows,
                               Integer dropIndex, Value appendedValue) throws DBException {
+        TableMeta oldMeta = metaManager.getTable(tableName);
+        Map<String, IndexMeta> preservedIndexes = new HashMap<>();
+        for (IndexMeta indexMeta : oldMeta.getIndexes().values()) {
+            boolean droppedIndexedColumn = dropIndex != null
+                    && oldMeta.columns_list.get(dropIndex).name.equalsIgnoreCase(indexMeta.columnName);
+            if (!droppedIndexedColumn) {
+                preservedIndexes.put(indexMeta.indexName, indexMeta);
+            }
+        }
         String dataFile = String.format("%s/%s", tableName, "data");
         bufferPool.DeleteAllPages(dataFile);
         bufferPool.Reset();
         diskManager.DeleteFile(dataFile);
         recordManager.CreateFile(dataFile, recordSize(newColumns));
         metaManager.dropTable(tableName);
-        metaManager.createTable(new TableMeta(tableName, newColumns));
+        TableMeta newMeta = new TableMeta(tableName, newColumns);
+        newMeta.setIndexes(preservedIndexes);
+        metaManager.createTable(newMeta);
         RecordFileHandle fileHandle = recordManager.OpenFile(tableName);
         for (Value[] oldRow : oldRows) {
             ByteBuf buffer = Unpooled.buffer();
@@ -215,6 +234,7 @@ public class DBManager {
         }
         recordManager.CloseFile(fileHandle);
         persistRuntimeState();
+        rebuildIndexesForTable(tableName);
     }
 
     private ArrayList<ColumnMeta> copyColumns(List<ColumnMeta> columns) {
@@ -305,6 +325,67 @@ public class DBManager {
         recordManager.CreateFile(data_file, record_size);
     }
 
+    public void createIndex(String indexName, String tableName, String columnName) throws DBException {
+        TableMeta tableMeta = metaManager.getTable(tableName);
+        if (!tableMeta.hasColumn(columnName)) {
+            throw new DBException(ExceptionTypes.ColumnDoesNotExist(columnName));
+        }
+        IndexMeta indexMeta = new IndexMeta(indexName, tableName, columnName, TableMeta.IndexType.BTREE);
+        metaManager.createIndex(indexMeta);
+        rebuildIndex(indexMeta);
+        persistRuntimeState();
+        Logger.info("Successfully created index {} on {}({})", indexName, tableName, columnName);
+        Logger.info("\n{}", runtimeIndexes.get(indexName).printTree());
+    }
+
+    public void dropIndex(String indexName) throws DBException {
+        metaManager.dropIndex(indexName);
+        runtimeIndexes.remove(indexName);
+        persistRuntimeState();
+        Logger.info("Successfully dropped index: {}", indexName);
+    }
+
+    public InMemoryOrderedIndex getIndex(String indexName) throws DBException {
+        ensureRuntimeIndexes();
+        return runtimeIndexes.get(indexName);
+    }
+
+    public IndexMeta findIndexOnColumn(String tableName, String columnName) throws DBException {
+        return metaManager.getTable(tableName).findIndexOnColumn(columnName);
+    }
+
+    public void insertIndexEntries(String tableName, RID rid, Value[] values) throws DBException {
+        ensureRuntimeIndexes();
+        TableMeta tableMeta = metaManager.getTable(tableName);
+        for (IndexMeta indexMeta : tableMeta.getIndexes().values()) {
+            runtimeIndexes.get(indexMeta.indexName).insert(values[columnIndex(tableMeta, indexMeta.columnName)], rid);
+        }
+    }
+
+    public void deleteIndexEntries(String tableName, RID rid, Value[] values) throws DBException {
+        ensureRuntimeIndexes();
+        TableMeta tableMeta = metaManager.getTable(tableName);
+        for (IndexMeta indexMeta : tableMeta.getIndexes().values()) {
+            InMemoryOrderedIndex index = runtimeIndexes.get(indexMeta.indexName);
+            if (index != null) {
+                index.delete(values[columnIndex(tableMeta, indexMeta.columnName)], rid);
+            }
+        }
+    }
+
+    public void updateIndexEntries(String tableName, RID rid, Value[] oldValues, Value[] newValues) throws DBException {
+        ensureRuntimeIndexes();
+        TableMeta tableMeta = metaManager.getTable(tableName);
+        for (IndexMeta indexMeta : tableMeta.getIndexes().values()) {
+            int columnIndex = columnIndex(tableMeta, indexMeta.columnName);
+            InMemoryOrderedIndex index = runtimeIndexes.get(indexMeta.indexName);
+            if (index != null) {
+                index.delete(oldValues[columnIndex], rid);
+                index.insert(newValues[columnIndex], rid);
+            }
+        }
+    }
+
     /**
      * Drops a table from the database by removing its metadata and associated
      * files.
@@ -319,6 +400,10 @@ public class DBManager {
         }
         bufferPool.DeleteAllPages(String.format("%s/%s", table_name, "data"));
         bufferPool.Reset();
+        TableMeta tableMeta = metaManager.getTable(table_name);
+        for (String indexName : new ArrayList<>(tableMeta.getIndexes().keySet())) {
+            runtimeIndexes.remove(indexName);
+        }
         metaManager.dropTable(table_name);
         diskManager.DeleteFile(String.format("%s/%s", table_name, "data"));
         File tableDir = new File(String.format("%s/%s", diskManager.getCurrentDir(), table_name));
@@ -410,5 +495,61 @@ public class DBManager {
         this.bufferPool.Reset();
         this.diskManager.reloadMeta();
         this.metaManager.reloadFromJson();
+        rebuildAllIndexes();
+    }
+
+    private void ensureRuntimeIndexes() throws DBException {
+        for (String tableName : metaManager.getTableNames()) {
+            TableMeta tableMeta = metaManager.getTable(tableName);
+            for (IndexMeta indexMeta : tableMeta.getIndexes().values()) {
+                if (!runtimeIndexes.containsKey(indexMeta.indexName)) {
+                    rebuildIndex(indexMeta);
+                }
+            }
+        }
+    }
+
+    private void rebuildAllIndexes() throws DBException {
+        runtimeIndexes.clear();
+        for (String tableName : metaManager.getTableNames()) {
+            rebuildIndexesForTable(tableName);
+        }
+    }
+
+    private void rebuildIndexesForTable(String tableName) throws DBException {
+        TableMeta tableMeta = metaManager.getTable(tableName);
+        for (IndexMeta indexMeta : tableMeta.getIndexes().values()) {
+            rebuildIndex(indexMeta);
+        }
+    }
+
+    private void rebuildIndex(IndexMeta indexMeta) throws DBException {
+        InMemoryOrderedIndex index = new InMemoryOrderedIndex();
+        runtimeIndexes.put(indexMeta.indexName, index);
+        edu.sustech.cs307.physicalOperator.SeqScanOperator scanner =
+                new edu.sustech.cs307.physicalOperator.SeqScanOperator(indexMeta.tableName, this);
+        scanner.Begin();
+        try {
+            while (scanner.hasNext()) {
+                scanner.Next();
+                if (scanner.Current() instanceof edu.sustech.cs307.tuple.TableTuple tuple) {
+                    Value value = tuple.getValue(new TabCol(indexMeta.tableName, indexMeta.columnName));
+                    if (value != null) {
+                        index.insert(value, tuple.getRID());
+                    }
+                }
+            }
+        } finally {
+            scanner.Close();
+        }
+    }
+
+    private int columnIndex(TableMeta tableMeta, String columnName) throws DBException {
+        for (int i = 0; i < tableMeta.columns_list.size(); i++) {
+            if (tableMeta.columns_list.get(i).name.equalsIgnoreCase(columnName)) {
+                return i;
+            }
+        }
+        throw new DBException(ExceptionTypes.ColumnDoesNotExist(columnName));
     }
 }

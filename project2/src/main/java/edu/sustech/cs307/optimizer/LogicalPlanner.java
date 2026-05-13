@@ -14,6 +14,7 @@ import net.sf.jsqlparser.statement.select.*;
 import net.sf.jsqlparser.statement.update.Update;
 import net.sf.jsqlparser.statement.alter.Alter;
 import net.sf.jsqlparser.statement.insert.Insert;
+import net.sf.jsqlparser.statement.create.index.CreateIndex;
 import net.sf.jsqlparser.statement.create.table.CreateTable;
 import net.sf.jsqlparser.statement.delete.Delete;
 import net.sf.jsqlparser.statement.drop.Drop;
@@ -86,9 +87,16 @@ public class LogicalPlanner {
             CreateTableExecutor createTable = new CreateTableExecutor(createTableStmt, dbManager, sql);
             createTable.execute();
             return null;
+        } else if (stmt instanceof CreateIndex createIndexStmt) {
+            handleCreateIndex(dbManager, createIndexStmt);
+            return null;
         } else if (stmt instanceof Drop dropStmt) {
             if (dropStmt.getType().equalsIgnoreCase("TABLE")) {
                 dbManager.dropTable(dropStmt.getName().getName());
+                return null;
+            }
+            if (dropStmt.getType().equalsIgnoreCase("INDEX")) {
+                dbManager.dropIndex(dropStmt.getName().getName());
                 return null;
             }
             throw new DBException(ExceptionTypes.UnsupportedCommand(dropStmt.toString()));
@@ -221,6 +229,16 @@ public class LogicalPlanner {
         String tableName = deleteStmt.getTable().getName();
         LogicalOperator root = new LogicalTableScanOperator(tableName, dbManager);
         return new LogicalDeleteOperator(root, tableName, deleteStmt.getWhere());
+    }
+
+    private static void handleCreateIndex(DBManager dbManager, CreateIndex createIndexStmt) throws DBException {
+        String tableName = createIndexStmt.getTable().getName();
+        var index = createIndexStmt.getIndex();
+        if (index == null || index.getName() == null || index.getColumnsNames() == null
+                || index.getColumnsNames().size() != 1) {
+            throw new DBException(ExceptionTypes.UnsupportedCommand(createIndexStmt.toString()));
+        }
+        dbManager.createIndex(index.getName(), tableName, index.getColumnsNames().get(0));
     }
     private static String normalizeSql(String sql) {
         String normalizedSql = sql == null ? "" : sql.trim();

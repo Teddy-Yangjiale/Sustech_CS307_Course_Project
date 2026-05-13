@@ -87,6 +87,8 @@ public class UpdateOperator implements PhysicalOperator {
                 }
 
                 fileHandle.UpdateRecord(tuple.getRID(), buffer);
+                seqScanOperator.getDbManager().updateIndexEntries(tableName, tuple.getRID(),
+                        oldValues, newValues.toArray(new Value[0]));
                 updateCount++;
             }
         }

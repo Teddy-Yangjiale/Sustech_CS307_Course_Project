@@ -136,4 +136,8 @@ public class SeqScanOperator implements PhysicalOperator {
     public RecordFileHandle getFileHandle() {
         return fileHandle;
     }
+
+    public DBManager getDbManager() {
+        return dbManager;
+    }
 }

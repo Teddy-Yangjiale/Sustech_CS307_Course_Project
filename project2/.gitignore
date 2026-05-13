@@ -29,3 +29,6 @@ bin/
 .DS_Store
 .idea/
 .CS307-DB/
+
+CS307-DB/
+target/

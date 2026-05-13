@@ -60,6 +60,38 @@ public class MetaManager {
         saveToJson();
     }
 
+    public void createIndex(IndexMeta indexMeta) throws DBException {
+        TableMeta tableMeta = getTable(indexMeta.tableName);
+        for (TableMeta existingTable : tables.values()) {
+            if (existingTable.getIndexes().containsKey(indexMeta.indexName)) {
+                throw new DBException(ExceptionTypes.InvalidSQL(indexMeta.indexName, "Index already exists"));
+            }
+        }
+        tableMeta.addIndex(indexMeta);
+        saveToJson();
+    }
+
+    public IndexMeta dropIndex(String indexName) throws DBException {
+        for (TableMeta tableMeta : tables.values()) {
+            if (tableMeta.getIndexes().containsKey(indexName)) {
+                IndexMeta removed = tableMeta.dropIndex(indexName);
+                saveToJson();
+                return removed;
+            }
+        }
+        throw new DBException(ExceptionTypes.InvalidSQL(indexName, "Index does not exist"));
+    }
+
+    public IndexMeta getIndex(String indexName) {
+        for (TableMeta tableMeta : tables.values()) {
+            IndexMeta indexMeta = tableMeta.getIndexes().get(indexName);
+            if (indexMeta != null) {
+                return indexMeta;
+            }
+        }
+        return null;
+    }
+
     public TableMeta getTable(String tableName) throws DBException {
         if (tables.containsKey(tableName)) {
             return tables.get(tableName);

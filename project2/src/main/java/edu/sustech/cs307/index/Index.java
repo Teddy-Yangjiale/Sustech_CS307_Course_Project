@@ -1,17 +1,23 @@
 package edu.sustech.cs307.index;
 
-import java.util.Iterator;
-import java.util.Map.Entry;
-
+import edu.sustech.cs307.exception.DBException;
 import edu.sustech.cs307.record.RID;
 import edu.sustech.cs307.value.Value;
 
+import java.util.List;
+
 public interface Index {
-    RID EqualTo(Value value);
+    List<RID> equalTo(Value value) throws DBException;
 
-    Iterator<Entry<Value, RID>> LessThan(Value value, boolean isEqual);
+    List<RID> lessThan(Value value, boolean isEqual) throws DBException;
 
-    Iterator<Entry<Value, RID>> MoreThan(Value value, boolean isEqual);
+    List<RID> moreThan(Value value, boolean isEqual) throws DBException;
 
-    Iterator<Entry<Value, RID>> Range(Value low, Value high, boolean leftEqual, boolean rightEqual);
+    List<RID> range(Value low, Value high, boolean leftEqual, boolean rightEqual) throws DBException;
+
+    void insert(Value value, RID rid) throws DBException;
+
+    void delete(Value value, RID rid) throws DBException;
+
+    String printTree();
 }

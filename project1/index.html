@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <title>SUSTech Aviation - 航空票务系统</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <script src="https://unpkg.com/element-plus"></script>
+    <script src="https://unpkg.com/@element-plus/icons-vue"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            background: #f5f7fa;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+        }
+
+        .navbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #409EFF;
+            color: #fff;
+            padding: 0 40px;
+            height: 60px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .main {
+            max-width: 1250px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        .search-area {
+            background: #fff;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+        }
+
+        .flight-card {
+            background: #fff;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            border: 1px solid #ebeef5;
+            display: grid;
+            grid-template-columns: 120px 1fr 120px 220px;
+            align-items: center;
+        }
+
+        .flight-card:hover {
+            border-color: #409EFF;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .time {
+            font-size: 26px;
+            font-weight: bold;
+            color: #303133;
+        }
+
+        .airport {
+            font-size: 14px;
+            color: #909399;
+            margin-top: 5px;
+        }
+
+        .price {
+            color: #f56c6c;
+            font-size: 28px;
+            font-weight: bold;
+        }
+
+        [v-cloak] {
+            display: none;
+        }
+
+        .el-divider--vertical {
+            height: 40px;
+            margin: 0 15px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app" v-cloak>
+        <div class="navbar" :style="role === 'admin' ? 'background:#303133' : ''">
+            <div style="font-size: 22px; font-weight: bold;">✈️ SUSTech Aviation</div>
+            <div v-if="isLoggedIn">
+                <span style="margin-right:20px">{{ role === 'admin' ? '管理员' : '乘客' }}: {{ currentUser.name }}</span>
+                <el-button type="info" size="small" link @click="logout" style="color:#fff">退出登录</el-button>
+            </div>
+        </div>
+
+        <div class="main">
+            <el-card v-if="!isLoggedIn" style="width: 400px; margin: 80px auto; border-radius: 12px;">
+                <el-tabs v-model="loginTab" stretch>
+                    <el-tab-pane label="乘客登录" name="user">
+                        <el-form @submit.prevent="handleLogin" label-position="top">
+                            <el-form-item label="手机号"><el-input v-model="loginForm.phone"
+                                    placeholder="13800138000"></el-input></el-form-item>
+                            <el-form-item label="密码"><el-input v-model="loginForm.password" type="password"
+                                    show-password></el-input></el-form-item>
+                            <el-button type="primary" style="width:100%" @click="handleLogin"
+                                :loading="loading">登录</el-button>
+                        </el-form>
+                    </el-tab-pane>
+                    <el-tab-pane label="后台管理" name="admin">
+                        <el-form @submit.prevent="handleAdminLogin" label-position="top">
+                            <el-form-item label="系统授权码"><el-input v-model="loginForm.adminCode" type="password"
+                                    placeholder="admin" show-password
+                                    @keyup.enter="handleAdminLogin"></el-input></el-form-item>
+                            <el-button type="info" style="width:100%" @click="handleAdminLogin">进入系统控制台</el-button>
+                        </el-form>
+                    </el-tab-pane>
+                </el-tabs>
+            </el-card>
+
+            <div v-if="isLoggedIn && role === 'passenger'">
+                <el-tabs v-model="activeTab">
+                    <el-tab-pane label="🔍 查询购票" name="booking">
+                        <div class="search-area">
+                            <el-form :inline="true" size="default">
+                                <el-form-item label="出发"><el-input v-model="search.src" placeholder="Beijing/PEK"
+                                        style="width:125px"></el-input></el-form-item>
+                                <el-form-item label="终点"><el-input v-model="search.dst" placeholder="Shanghai/SHA"
+                                        style="width:125px"></el-input></el-form-item>
+                                <el-form-item label="日期"><el-date-picker v-model="search.date" type="date"
+                                        value-format="YYYY-MM-DD" style="width:140px"></el-date-picker></el-form-item>
+                                <el-divider direction="vertical"></el-divider>
+                                <el-form-item label="航司"><el-input v-model="search.airline" placeholder="可选"
+                                        style="width:110px"></el-input></el-form-item>
+                                <el-form-item label="不早于"><el-time-select v-model="search.notEarlierThan" start="00:00"
+                                        step="00:10" end="23:50" placeholder="起始"
+                                        style="width:100px"></el-time-select></el-form-item>
+                                <el-form-item label="不晚于"><el-time-select v-model="search.notLaterThan" start="00:00"
+                                        step="00:10" end="23:50" placeholder="截止"
+                                        style="width:100px"></el-time-select></el-form-item>
+                                <el-button type="primary" @click="doSearch" :loading="loading"
+                                    icon="Search">搜索</el-button>
+                            </el-form>
+                        </div>
+                        <div v-for="f in flights" :key="f.flightId + f.cabinClass" class="flight-card">
+                            <div style="text-align:center">
+                                <div class="time">{{ f.depTime }}</div>
+                                <div class="airport">{{ f.srcCode }}</div>
+                            </div>
+                            <div style="text-align:center; padding:0 30px">
+                                <div style="font-size:12px; color:#606266">{{ f.airlineName }} · {{ f.flightNumber }}
+                                </div>
+                                <div style="height:1px; background:#dcdfe6; margin:15px 0; position:relative"><span
+                                        style="position:absolute; top:-10px; left:48%">✈️</span></div>
+                            </div>
+                            <div style="text-align:center">
+                                <div class="time">{{ f.arrTime }}<el-tag v-if="f.arrivalDayOffset > 0" type="danger"
+                                        size="small" effect="dark" style="margin-left:5px">+{{ f.arrivalDayOffset
+                                        }}天</el-tag></div>
+                                <div class="airport">{{ f.dstCode }}</div>
+                            </div>
+                            <div style="border-left:1px dashed #dcdfe6; padding-left:25px; text-align:right">
+                                <div style="font-size:12px; color:#909399">{{ f.cabinClass }} | 余票 {{ f.remainCount }}
+                                </div>
+                                <div class="price">¥{{ f.price }}</div>
+                                <el-button type="warning" size="small" round @click="openBook(f)">订票</el-button>
+                            </div>
+                        </div>
+                        <el-empty v-if="flights.length === 0" description="未找到符合条件的航班"></el-empty>
+                    </el-tab-pane>
+
+                    <el-tab-pane label="📄 我的订单" name="orders">
+                        <el-table :data="myOrders" border stripe>
+                            <el-table-column prop="fdate" label="航班日期" width="120"></el-table-column>
+                            <el-table-column prop="contact_name" label="乘机人" width="120"></el-table-column>
+                            <el-table-column prop="cabin_class" label="舱位" width="120"></el-table-column>
+                            <el-table-column prop="ticket_price" label="价格" width="100"></el-table-column>
+                            <el-table-column prop="order_status" label="状态" width="100">
+                                <template #default="scope"><el-tag
+                                        :type="scope.row.order_status === 'PAID' ? 'success' : 'info'">{{
+                                        scope.row.order_status }}</el-tag></template>
+                            </el-table-column>
+                            <el-table-column label="操作">
+                                <template #default="scope"><el-button v-if="scope.row.order_status==='PAID'"
+                                        type="danger" size="small"
+                                        @click="refund(scope.row)">退票/删除</el-button></template>
+                            </el-table-column>
+                        </el-table>
+                    </el-tab-pane>
+
+                    <el-tab-pane label="👥 联系人管理" name="contacts_mgr">
+                        <el-button type="primary" icon="Plus" @click="contactVisible = true"
+                            style="margin-bottom:20px">新增乘机人</el-button>
+                        <el-table :data="contacts" border>
+                            <el-table-column prop="contact_name" label="姓名" width="150"></el-table-column>
+                            <el-table-column prop="id_number" label="身份证号"></el-table-column>
+                            <el-table-column prop="mobile_number" label="手机号" width="150"></el-table-column>
+                            <el-table-column label="操作" width="180" fixed="right">
+                                <template #default="scope">
+                                    <el-button size="small" type="primary" plain
+                                        @click="openEditContact(scope.row)">编辑</el-button>
+                                    <el-button size="small" type="danger" plain
+                                        @click="deleteContact(scope.row)">删除</el-button>
+                                </template>
+                            </el-table-column>
+                        </el-table>
+                    </el-tab-pane>
+                </el-tabs>
+            </div>
+
+            <div v-if="isLoggedIn && role === 'admin'">
+                <el-tabs v-model="adminTab">
+                    <el-tab-pane label="🛠️ 票务微观管理 (CRUD)" name="crud">
+                        <div class="search-area" style="padding: 15px 25px;">
+                            <el-form :inline="true" size="default">
+                                <el-form-item label="始发"><el-input v-model="adminSearch.src" placeholder="城市/代码"
+                                        style="width:120px"></el-input></el-form-item>
+                                <el-form-item label="到达"><el-input v-model="adminSearch.dst" placeholder="城市/代码"
+                                        style="width:120px"></el-input></el-form-item>
+                                <el-form-item label="日期"><el-date-picker v-model="adminSearch.date" type="date"
+                                        value-format="YYYY-MM-DD" style="width:140px"></el-date-picker></el-form-item>
+                                <el-button type="info" @click="fetchAdminFlights" icon="Search"
+                                    :loading="loading">检索系统票务</el-button>
+
+                                <el-button type="success" @click="flightFormVisible = true" icon="Plus"
+                                    style="float: right;">录入完整航班信息</el-button>
+                            </el-form>
+                        </div>
+
+                        <el-table :data="adminFlights" border stripe height="500">
+                            <el-table-column prop="flightId" label="航班ID" width="80"></el-table-column>
+                            <el-table-column prop="flightDate" label="起飞日期" width="120"></el-table-column>
+                            <el-table-column prop="flightNumber" label="航班号" width="100"></el-table-column>
+                            <el-table-column label="起降时间" width="120">
+                                <template #default="scope">{{ scope.row.depTime }} - {{ scope.row.arrTime }}</template>
+                            </el-table-column>
+                            <el-table-column label="航段" width="130">
+                                <template #default="scope">{{ scope.row.srcCode }} ✈️ {{ scope.row.dstCode }}</template>
+                            </el-table-column>
+                            <el-table-column prop="cabinClass" label="舱位" width="110"></el-table-column>
+                            <el-table-column label="单张定价" width="100">
+                                <template #default="scope"><span style="color:#f56c6c; font-weight:bold;">¥{{
+                                        scope.row.price }}</span></template>
+                            </el-table-column>
+                            <el-table-column prop="remainCount" label="余票" width="80"></el-table-column>
+                            <el-table-column label="核心操作" fixed="right" width="220">
+                                <template #default="scope">
+                                    <el-button size="small" type="primary" plain
+                                        @click="openEditCabin(scope.row)">调价/库存(U)</el-button>
+                                    <el-button size="small" type="danger" plain
+                                        @click="deleteAdminFlight(scope.row)">删除(D)</el-button>
+                                </template>
+                            </el-table-column>
+                        </el-table>
+                    </el-tab-pane>
+
+                    <el-tab-pane label="⚙️ 自动化排班 (Batch)" name="batch">
+                        <el-card header="大规模数据极速生成任务" style="max-width: 500px; margin-top: 20px;">
+                            <p style="color: #606266; font-size: 14px;">此操作将基于 route 表自动进行笛卡尔积运算生成航班与双舱位数据。</p>
+                            <el-date-picker v-model="adminRange" type="daterange" value-format="YYYY-MM-DD"
+                                style="width:100%; margin-bottom:20px" range-separator="至"></el-date-picker>
+                            <el-button type="danger" style="width:100%" @click="doBatch"
+                                :loading="loading">立即启动生成任务</el-button>
+                        </el-card>
+                    </el-tab-pane>
+
+                    <el-tab-pane label="📈 交易流水审计 (Audit)" name="audit">
+                        <el-button icon="Refresh" size="small" @click="fetchAdminOrders"
+                            style="margin-bottom: 10px;">刷新流水</el-button>
+                        <el-table :data="adminOrders" height="550" border size="small" stripe>
+                            <el-table-column prop="orderId" label="订单 ID" width="80"></el-table-column>
+                            <el-table-column prop="passengerName" label="买方账户" width="130"></el-table-column>
+                            <el-table-column prop="contactName" label="乘机人" width="130"></el-table-column>
+                            <el-table-column prop="flightNumber" label="航班号" width="100"></el-table-column>
+                            <el-table-column prop="cabinClass" label="舱位" width="100"></el-table-column>
+                            <el-table-column prop="ticketPrice" label="实收金额" width="100"></el-table-column>
+                            <el-table-column prop="orderTime" label="交易物理时间" width="180"></el-table-column>
+                            <el-table-column prop="orderStatus" label="状态" width="100"></el-table-column>
+                        </el-table>
+                    </el-tab-pane>
+                </el-tabs>
+            </div>
+        </div>
+
+        <el-dialog v-model="bookShow" title="确认订单信息" width="400px">
+            <div v-if="curF">
+                <p>所选航班：<b>{{ curF.flightNumber }}</b> ({{ curF.cabinClass }})</p>
+                <el-select v-model="selContact" placeholder="请选择乘机人" style="width:100%">
+                    <el-option v-for="c in contacts" :key="c.contact_id" :label="c.contact_name"
+                        :value="c.contact_id"></el-option>
+                </el-select>
+                <div style="text-align:right; color:#f56c6c; font-size:24px; font-weight:bold; margin-top:20px">¥{{
+                    curF.price }}</div>
+            </div>
+            <template #footer>
+                <el-button @click="bookShow = false">取消</el-button>
+                <el-button type="primary" @click="confirmBook" :loading="loading">支付并下单</el-button>
+            </template>
+        </el-dialog>
+
+        <el-dialog v-model="contactVisible" title="新增常用乘机人" width="400px">
+            <el-form label-position="top">
+                <el-form-item label="真实姓名"><el-input v-model="newContact.name"></el-input></el-form-item>
+                <el-form-item label="18位身份证号"><el-input v-model="newContact.idNum"></el-input></el-form-item>
+                <el-form-item label="11位手机号"><el-input v-model="newContact.phone"></el-input></el-form-item>
+            </el-form>
+            <template #footer>
+                <el-button @click="contactVisible = false">取消</el-button>
+                <el-button type="primary" @click="saveContact" :loading="loading">保存</el-button>
+            </template>
+        </el-dialog>
+
+        <el-dialog v-model="editContactVisible" title="修改乘机人信息" width="400px">
+            <el-form label-position="top">
+                <el-form-item label="真实姓名"><el-input v-model="editContactForm.name"></el-input></el-form-item>
+                <el-form-item label="18位身份证号"><el-input v-model="editContactForm.idNum"></el-input></el-form-item>
+                <el-form-item label="11位手机号"><el-input v-model="editContactForm.phone"></el-input></el-form-item>
+            </el-form>
+            <template #footer>
+                <el-button @click="editContactVisible = false">取消</el-button>
+                <el-button type="primary" @click="saveEditContact" :loading="loading">保存修改</el-button>
+            </template>
+        </el-dialog>
+
+        <el-dialog v-model="flightFormVisible" title="构建全局航班与航线数据" width="600px">
+            <el-form label-width="110px" size="default">
+                <el-row :gutter="20">
+                    <el-col :span="12"><el-form-item label="航班号"><el-input v-model="flightForm.flightNumber"
+                                placeholder="如 CA8888"></el-input></el-form-item></el-col>
+                    <el-col :span="12"><el-form-item label="航司名称"><el-input v-model="flightForm.airlineName"
+                                placeholder="如 Air China"></el-input></el-form-item></el-col>
+                </el-row>
+                <el-row :gutter="20">
+                    <el-col :span="12"><el-form-item label="始发机场代码"><el-input v-model="flightForm.srcIata"
+                                placeholder="如 PEK"></el-input></el-form-item></el-col>
+                    <el-col :span="12"><el-form-item label="目的机场代码"><el-input v-model="flightForm.dstIata"
+                                placeholder="如 SHA"></el-input></el-form-item></el-col>
+                </el-row>
+                <el-row :gutter="20">
+                    <el-col :span="12"><el-form-item label="起飞时间"><el-time-select v-model="flightForm.depTime"
+                                start="00:00" step="00:10" end="23:50"
+                                style="width:100%"></el-time-select></el-form-item></el-col>
+                    <el-col :span="12"><el-form-item label="到达时间"><el-time-select v-model="flightForm.arrTime"
+                                start="00:00" step="00:10" end="23:50"
+                                style="width:100%"></el-time-select></el-form-item></el-col>
+                </el-row>
+                <el-form-item label="飞行日期"><el-date-picker v-model="flightForm.date" type="date"
+                        value-format="YYYY-MM-DD" style="width: 100%;"></el-date-picker></el-form-item>
+
+                <el-divider>下发初始舱位与定价</el-divider>
+
+                <el-row :gutter="20">
+                    <el-col :span="12"><el-form-item label="经济舱价格"><el-input-number v-model="flightForm.ecoPrice"
+                                :min="0" :step="100" style="width:100%"></el-input-number></el-form-item></el-col>
+                    <el-col :span="12"><el-form-item label="经济舱库容"><el-input-number v-model="flightForm.ecoCount"
+                                :min="0" :step="10" style="width:100%"></el-input-number></el-form-item></el-col>
+                </el-row>
+                <el-row :gutter="20">
+                    <el-col :span="12"><el-form-item label="公务舱价格"><el-input-number v-model="flightForm.busPrice"
+                                :min="0" :step="100" style="width:100%"></el-input-number></el-form-item></el-col>
+                    <el-col :span="12"><el-form-item label="公务舱库容"><el-input-number v-model="flightForm.busCount"
+                                :min="0" :step="5" style="width:100%"></el-input-number></el-form-item></el-col>
+                </el-row>
+            </el-form>
+            <template #footer>
+                <el-button @click="flightFormVisible = false">取消放弃</el-button>
+                <el-button type="success" @click="saveNewFlight" :loading="loading">确认并录入数据库</el-button>
+            </template>
+        </el-dialog>
+
+        <el-dialog v-model="editCabinVisible" title="舱位属性调优 (U)" width="400px">
+            <p style="color:#909399; font-size:12px; margin-bottom:15px;">航班号: {{ editCabinForm.flightNumber }} | 舱位: {{
+                editCabinForm.cabinClass }}</p>
+            <el-form label-width="100px">
+                <el-form-item label="调整票价"><el-input-number v-model="editCabinForm.price" :min="0"
+                        :step="50"></el-input-number></el-form-item>
+                <el-form-item label="修改物理库存"><el-input-number v-model="editCabinForm.count"
+                        :min="0"></el-input-number></el-form-item>
+            </el-form>
+            <template #footer><el-button @click="editCabinVisible = false">放弃</el-button><el-button type="primary"
+                    @click="saveCabinEdit" :loading="loading">立即生效</el-button></template>
+        </el-dialog>
+
+    </div>
+
+    <script>
+        const { createApp, ref, reactive } = Vue;
+        const API = 'http://localhost:8080/api';
+
+        createApp({
+            setup() {
+                const isLoggedIn = ref(false);
+                const role = ref('');
+                const currentUser = ref({ id: null, name: '' });
+                const loading = ref(false);
+                const loginTab = ref('user');
+                const loginForm = reactive({ phone: '13800138000', password: '123456', adminCode: '' });
+
+                // ===== 乘客数据 =====
+                const activeTab = ref('booking');
+                const search = reactive({ src: '', dst: '', date: '2026-02-01', airline: '', notEarlierThan: '', notLaterThan: '' });
+                const flights = ref([]);
+                const myOrders = ref([]);
+                const contacts = ref([]);
+                const bookShow = ref(false);
+                const curF = ref(null);
+                const selContact = ref(null);
+
+                // 新增联系人
+                const contactVisible = ref(false);
+                const newContact = reactive({ name: '', idNum: '', phone: '' });
+
+                // 修改联系人
+                const editContactVisible = ref(false);
+                const editContactForm = reactive({ id: null, name: '', idNum: '', phone: '' });
+
+                // ===== 管理员数据 =====
+                const adminTab = ref('crud');
+                const adminSearch = reactive({ src: '', dst: '', date: '' });
+                const adminFlights = ref([]);
+                const adminRange = ref([]);
+                const adminOrders = ref([]);
+
+                const flightFormVisible = ref(false);
+                const flightForm = reactive({
+                    flightNumber: '', airlineName: '', srcIata: '', dstIata: '',
+                    depTime: '08:00', arrTime: '10:00', date: '',
+                    ecoPrice: 1200, ecoCount: 100, busPrice: 3000, busCount: 10
+                });
+
+                const editCabinVisible = ref(false);
+                const editCabinForm = reactive({ flightId: null, flightNumber: '', cabinClass: '', price: 0, count: 0 });
+
+                // ==================== 认证逻辑 ====================
+                const handleLogin = async () => {
+                    loading.value = true;
+                    try {
+                        const res = await axios.post(`${API}/auth/login`, { phone: loginForm.phone, password: loginForm.password });
+                        const pId = res.data.passenger_id || res.data.passengerId || res.data.id;
+                        const pName = res.data.passenger_name || res.data.passengerName || res.data.name;
+
+                        if (!pId) throw new Error("未能获取到有效的乘客ID");
+
+                        currentUser.value = { id: pId, name: pName };
+                        role.value = 'passenger'; isLoggedIn.value = true;
+                        fetchPassengerData();
+                    } catch (e) {
+                        ElementPlus.ElMessage.error(e.message || '账号或密码错误');
+                    } finally { loading.value = false; }
+                };
+
+                const handleAdminLogin = () => {
+                    if (loginForm.adminCode === 'admin') {
+                        isLoggedIn.value = true; role.value = 'admin';
+                        currentUser.value = { name: 'Root Admin' };
+                        // fetchAdminFlights();
+                        fetchAdminOrders();
+                    } else ElementPlus.ElMessage.error('系统授权码错误');
+                };
+
+                // ==================== 乘客业务 ====================
+                const doSearch = async () => {
+                    if (!search.src || !search.dst) return ElementPlus.ElMessage.warning('请输入起止城市');
+                    loading.value = true;
+                    try {
+                        const res = await axios.get(`${API}/flights/search`, { params: search });
+                        flights.value = res.data;
+                    } finally { loading.value = false; }
+                };
+
+                const openBook = (f) => { curF.value = f; bookShow.value = true; if (contacts.value.length > 0) selContact.value = contacts.value[0].contact_id; };
+
+                const confirmBook = async () => {
+                    if (!selContact.value) return ElementPlus.ElMessage.warning('请选择乘机人');
+                    loading.value = true;
+                    try {
+                        await axios.post(`${API}/orders/book`, { passengerId: currentUser.value.id, contactId: selContact.value, flightId: curF.value.flightId, cabinClass: curF.value.cabinClass });
+                        ElementPlus.ElNotification.success('订票成功');
+                        bookShow.value = false; fetchPassengerData(); doSearch();
+                    } catch (e) { ElementPlus.ElMessage.error(e.response?.data || '票务异常'); }
+                    finally { loading.value = false; }
+                };
+
+                const refund = async (o) => {
+                    try {
+                        await ElementPlus.ElMessageBox.confirm('确定退票吗？将即时返还系统物理库存。', '退票确认', { type: 'warning' });
+                        await axios.post(`${API}/orders/cancel`, null, { params: { orderId: o.order_id || o.orderId, passengerId: currentUser.value.id } });
+                        ElementPlus.ElMessage.success('已退票并回收库存');
+                        fetchPassengerData(); doSearch();
+                    } catch (e) { }
+                };
+
+                // 新增联系人
+                const saveContact = async () => {
+                    if (!newContact.name || !newContact.idNum) return ElementPlus.ElMessage.warning('姓名和身份证号为必填项');
+                    loading.value = true;
+                    try {
+                        await axios.post(`${API}/contacts`, { ownerId: currentUser.value.id, name: newContact.name, idNum: newContact.idNum, phone: newContact.phone });
+                        ElementPlus.ElMessage.success('乘机人保存成功');
+                        contactVisible.value = false; newContact.name = ''; newContact.idNum = ''; newContact.phone = ''; fetchPassengerData();
+                    } catch (e) { ElementPlus.ElMessage.error(e.response?.data || '保存失败'); }
+                    finally { loading.value = false; }
+                };
+
+                // 打开修改联系人弹窗
+                const openEditContact = (c) => {
+                    editContactForm.id = c.contact_id;
+                    editContactForm.name = c.contact_name;
+                    editContactForm.idNum = c.id_number;
+                    editContactForm.phone = c.mobile_number;
+                    editContactVisible.value = true;
+                };
+
+                // 保存修改联系人
+                const saveEditContact = async () => {
+                    if (!editContactForm.name || !editContactForm.idNum) return ElementPlus.ElMessage.warning('姓名和身份证号为必填项');
+                    loading.value = true;
+                    try {
+                        await axios.put(`${API}/contacts/${editContactForm.id}`, {
+                            ownerId: currentUser.value.id,
+                            name: editContactForm.name,
+                            idNum: editContactForm.idNum,
+                            phone: editContactForm.phone
+                        });
+                        ElementPlus.ElMessage.success('乘机人信息修改成功');
+                        editContactVisible.value = false;
+                        fetchPassengerData();
+                    } catch (e) {
+                        ElementPlus.ElMessage.error(e.response?.data || '修改失败');
+                    } finally { loading.value = false; }
+                };
+
+                // 删除联系人
+                const deleteContact = async (c) => {
+                    try {
+                        await ElementPlus.ElMessageBox.confirm(`确定要删除联系人 ${c.contact_name} 吗？`, '删除确认', { type: 'warning' });
+                        await axios.delete(`${API}/contacts/${c.contact_id}`, { params: { ownerId: currentUser.value.id } });
+                        ElementPlus.ElMessage.success('联系人已删除');
+                        fetchPassengerData();
+                    } catch (e) {
+                        if (e !== 'cancel') ElementPlus.ElMessage.error(e.response?.data || '删除失败');
+                    }
+                };
+
+                const fetchPassengerData = () => {
+                    axios.get(`${API}/contacts`, { params: { pid: currentUser.value.id } }).then(res => contacts.value = res.data);
+                    axios.get(`${API}/orders/my`, { params: { passengerId: currentUser.value.id } }).then(res => myOrders.value = res.data);
+                };
+
+                // ==================== 管理员业务 ====================
+
+                // const fetchAdminFlights = async () => {
+                //     loading.value = true;
+                //     try {
+                //         const res = await axios.get(`${API}/admin/flights`, { params: { src: adminSearch.src, dst: adminSearch.dst, date: adminSearch.date } });
+                //         adminFlights.value = res.data;
+                //     } finally { loading.value = false; }
+                // };
+
+                // 1. 修改登录逻辑：登录后不要自动去查几千万条的航班表！
+
+
+// 2. 修改查询逻辑：强制要求输入条件，否则坚决不发请求！
+const fetchAdminFlights = async () => {
+    // 🚨 终极防卡死墙：三个框全空时，直接拦截，根本不访问后端！
+    if (!adminSearch.src && !adminSearch.dst && !adminSearch.date) {
+        return ElementPlus.ElMessage.warning('为保护数据库性能，请至少输入一个搜索条件 (如日期或城市)！');
+    }
+
+    loading.value = true;
+    try {
+        const res = await axios.get(`${API}/admin/flights`, { 
+            params: { 
+                src: adminSearch.src, 
+                dst: adminSearch.dst, 
+                date: adminSearch.date 
+            } 
+        });
+        adminFlights.value = res.data;
+    } catch (error) {
+        ElementPlus.ElMessage.error('查询超时或失败，请缩小日期范围');
+    } finally { 
+        loading.value = false; 
+    }
+};
+                
+
+                const saveNewFlight = async () => {
+                    if (!flightForm.flightNumber || !flightForm.srcIata || !flightForm.dstIata || !flightForm.date) {
+                        return ElementPlus.ElMessage.warning("请填写完整的航班与机场代码信息");
+                    }
+                    loading.value = true;
+                    const payload = {
+                        flightNumber: flightForm.flightNumber, airlineName: flightForm.airlineName,
+                        srcIata: flightForm.srcIata.toUpperCase(), dstIata: flightForm.dstIata.toUpperCase(),
+                        depTime: flightForm.depTime + ':00', arrTime: flightForm.arrTime + ':00', date: flightForm.date,
+                        cabins: [
+                            { classType: 'ECONOMY', price: flightForm.ecoPrice, count: flightForm.ecoCount },
+                            { classType: 'BUSINESS', price: flightForm.busPrice, count: flightForm.busCount }
+                        ]
+                    };
+                    try {
+                        const res = await axios.post(`${API}/admin/flights/complete`, payload);
+                        ElementPlus.ElNotification.success(res.data);
+                        flightFormVisible.value = false; fetchAdminFlights();
+                    } catch (e) { ElementPlus.ElMessage.error(e.response?.data || "插入失败"); }
+                    finally { loading.value = false; }
+                };
+
+                const openEditCabin = (f) => {
+                    editCabinForm.flightId = f.flightId; editCabinForm.flightNumber = f.flightNumber;
+                    editCabinForm.cabinClass = f.cabinClass; editCabinForm.price = f.price; editCabinForm.count = f.remainCount;
+                    editCabinVisible.value = true;
+                };
+
+                const saveCabinEdit = async () => {
+                    loading.value = true;
+                    try {
+                        await axios.put(`${API}/admin/flights/${editCabinForm.flightId}/cabins/${editCabinForm.cabinClass}`, { price: editCabinForm.price, count: editCabinForm.count });
+                        ElementPlus.ElNotification.success("系统数据已同步更新");
+                        editCabinVisible.value = false; fetchAdminFlights();
+                    } catch (e) { ElementPlus.ElMessage.error("更新失败"); }
+                    finally { loading.value = false; }
+                };
+
+                const deleteAdminFlight = async (f) => {
+                    try {
+                        await ElementPlus.ElMessageBox.confirm(`高危操作警告：确定物理删除航班 ${f.flightNumber} 吗？`, '级联删除确认', { type: 'error' });
+                        await axios.delete(`${API}/admin/flights/${f.flightId}`);
+                        ElementPlus.ElMessage.success("数据已物理销毁");
+                        fetchAdminFlights(); fetchAdminOrders();
+                    } catch (e) { }
+                };
+
+                const fetchAdminOrders = () => axios.get(`${API}/admin/orders/audit`).then(res => adminOrders.value = res.data);
+
+                const doBatch = async () => {
+                    if (!adminRange.value) return ElementPlus.ElMessage.warning("请选择日期区间");
+                    loading.value = true;
+                    try {
+                        const res = await axios.post(`${API}/admin/generate`, null, { params: { start: adminRange.value[0], end: adminRange.value[1] } });
+                        ElementPlus.ElNotification.success({ title: '任务下达成功', message: res.data });
+                    } finally { loading.value = false; }
+                };
+
+                const logout = () => location.reload();
+
+                return {
+                    isLoggedIn, role, currentUser, loading, loginTab, loginForm, activeTab,
+                    search, flights, myOrders, contacts, bookShow, curF, selContact, contactVisible, newContact,
+                    editContactVisible, editContactForm, openEditContact, saveEditContact, deleteContact,
+                    adminTab, adminSearch, adminFlights, adminRange, adminOrders,
+                    flightFormVisible, flightForm, editCabinVisible, editCabinForm,
+                    handleLogin, handleAdminLogin, doSearch, openBook, confirmBook, refund, saveContact,
+                    fetchAdminFlights, saveNewFlight, openEditCabin, saveCabinEdit, deleteAdminFlight, fetchAdminOrders, doBatch, logout
+                };
+
+                
+            }
+        }).use(ElementPlus).mount('#app');
+    </script>
+</body>
+
+</html>

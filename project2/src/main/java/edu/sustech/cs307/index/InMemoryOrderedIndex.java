@@ -150,6 +150,9 @@ public class InMemoryOrderedIndex implements Index {
             leaf.keys.remove(index);
             leaf.values.remove(index);
             refreshParentKeys(leaf);
+            if (leaf != root && leaf.keys.size() < minLeafKeys()) {
+                rebalanceLeaf(leaf);
+            }
         }
     }
 
@@ -233,6 +236,136 @@ public class InMemoryOrderedIndex implements Index {
         node.keys.subList(mid, node.keys.size()).clear();
         node.children.subList(mid + 1, node.children.size()).clear();
         insertIntoParent(node, separator, right);
+    }
+
+    private void rebalanceLeaf(LeafNode leaf) throws DBException {
+        InternalNode parent = leaf.parent;
+        int index = parent.children.indexOf(leaf);
+        LeafNode left = index > 0 && parent.children.get(index - 1).isLeaf()
+                ? (LeafNode) parent.children.get(index - 1)
+                : null;
+        LeafNode right = index + 1 < parent.children.size() && parent.children.get(index + 1).isLeaf()
+                ? (LeafNode) parent.children.get(index + 1)
+                : null;
+
+        if (left != null && left.keys.size() > minLeafKeys()) {
+            int borrowedIndex = left.keys.size() - 1;
+            leaf.keys.add(0, left.keys.remove(borrowedIndex));
+            leaf.values.add(0, left.values.remove(borrowedIndex));
+            parent.keys.set(index - 1, leaf.keys.get(0));
+            refreshParentKeys(parent);
+            return;
+        }
+
+        if (right != null && right.keys.size() > minLeafKeys()) {
+            leaf.keys.add(right.keys.remove(0));
+            leaf.values.add(right.values.remove(0));
+            parent.keys.set(index, right.keys.get(0));
+            refreshParentKeys(parent);
+            return;
+        }
+
+        if (left != null) {
+            left.keys.addAll(leaf.keys);
+            left.values.addAll(leaf.values);
+            left.next = leaf.next;
+            parent.children.remove(index);
+            parent.keys.remove(index - 1);
+            rebalanceInternal(parent);
+            return;
+        }
+
+        if (right != null) {
+            leaf.keys.addAll(right.keys);
+            leaf.values.addAll(right.values);
+            leaf.next = right.next;
+            parent.children.remove(index + 1);
+            parent.keys.remove(index);
+            rebalanceInternal(parent);
+        }
+    }
+
+    private void rebalanceInternal(InternalNode node) throws DBException {
+        if (node == root) {
+            if (node.children.size() == 1) {
+                root = node.children.get(0);
+                root.parent = null;
+                if (root.isLeaf()) {
+                    firstLeaf = (LeafNode) root;
+                }
+            }
+            return;
+        }
+        if (node.children.size() >= minInternalChildren()) {
+            refreshParentKeys(node);
+            return;
+        }
+
+        InternalNode parent = node.parent;
+        int index = parent.children.indexOf(node);
+        InternalNode left = index > 0 && !parent.children.get(index - 1).isLeaf()
+                ? (InternalNode) parent.children.get(index - 1)
+                : null;
+        InternalNode right = index + 1 < parent.children.size() && !parent.children.get(index + 1).isLeaf()
+                ? (InternalNode) parent.children.get(index + 1)
+                : null;
+
+        if (left != null && left.children.size() > minInternalChildren()) {
+            Node borrowedChild = left.children.remove(left.children.size() - 1);
+            Value borrowedSeparator = left.keys.remove(left.keys.size() - 1);
+            Value parentSeparator = parent.keys.get(index - 1);
+            node.children.add(0, borrowedChild);
+            node.keys.add(0, parentSeparator);
+            borrowedChild.parent = node;
+            parent.keys.set(index - 1, borrowedSeparator);
+            refreshParentKeys(parent);
+            return;
+        }
+
+        if (right != null && right.children.size() > minInternalChildren()) {
+            Node borrowedChild = right.children.remove(0);
+            Value parentSeparator = parent.keys.get(index);
+            Value newParentSeparator = right.keys.remove(0);
+            node.children.add(borrowedChild);
+            node.keys.add(parentSeparator);
+            borrowedChild.parent = node;
+            parent.keys.set(index, newParentSeparator);
+            refreshParentKeys(parent);
+            return;
+        }
+
+        if (left != null) {
+            Value parentSeparator = parent.keys.remove(index - 1);
+            parent.children.remove(index);
+            left.keys.add(parentSeparator);
+            left.keys.addAll(node.keys);
+            for (Node child : node.children) {
+                child.parent = left;
+            }
+            left.children.addAll(node.children);
+            rebalanceInternal(parent);
+            return;
+        }
+
+        if (right != null) {
+            Value parentSeparator = parent.keys.remove(index);
+            parent.children.remove(index + 1);
+            node.keys.add(parentSeparator);
+            node.keys.addAll(right.keys);
+            for (Node child : right.children) {
+                child.parent = node;
+            }
+            node.children.addAll(right.children);
+            rebalanceInternal(parent);
+        }
+    }
+
+    private int minLeafKeys() {
+        return Math.max(1, order / 2);
+    }
+
+    private int minInternalChildren() {
+        return Math.max(2, (order + 1) / 2);
     }
 
     private void refreshParentKeys(Node node) {

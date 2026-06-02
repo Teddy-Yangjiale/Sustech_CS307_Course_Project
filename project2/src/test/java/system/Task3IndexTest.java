@@ -92,6 +92,27 @@ class Task3IndexTest {
         assertThat(selectFirstColumn(dbManager, "select * from t where t.id = 2")).isEmpty();
     }
 
+    @Test
+    void indexDeletionRebalancesTreeAndKeepsQueriesCorrect() throws DBException {
+        DBManager dbManager = buildDbManager();
+        executeStatement(dbManager, "create table t(id int, age int)");
+        for (int i = 1; i <= 80; i++) {
+            executeStatement(dbManager, String.format("insert into t (id, age) values (%d, %d)", i, i % 10));
+        }
+        executeStatement(dbManager, "create index idx_id on t(id)");
+
+        for (int i = 1; i <= 65; i++) {
+            executeStatement(dbManager, String.format("delete from t where t.id = %d", i));
+        }
+
+        assertThat(selectFirstColumn(dbManager, "select * from t where t.id = 1")).isEmpty();
+        assertThat(selectFirstColumn(dbManager, "select * from t where t.id = 66")).containsExactly(66L);
+        assertThat(selectFirstColumn(dbManager, "select * from t where t.id >= 78")).containsExactly(78L, 79L, 80L);
+
+        executeStatement(dbManager, "insert into t (id, age) values (81, 1)");
+        assertThat(selectFirstColumn(dbManager, "select * from t where t.id = 81")).containsExactly(81L);
+    }
+
     private DBManager buildDbManager() throws DBException {
         HashMap<String, Integer> fileOffsets = new HashMap<>();
         DiskManager diskManager = new DiskManager(tempDir.toString(), fileOffsets);

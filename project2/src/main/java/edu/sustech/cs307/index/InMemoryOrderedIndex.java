@@ -26,6 +26,8 @@ public class InMemoryOrderedIndex implements Index {
 
     private static class InternalNode extends Node {
         final ArrayList<Node> children = new ArrayList<>();
+        //两层list，有重复的 Key（比如建立在“年龄”字段上的索引，很多人都是 20 岁）。
+        // 外层 List 对应 keys，内层 List 存储具有相同 Key 的所有记录的物理地址（RID）。
 
         @Override
         boolean isLeaf() {

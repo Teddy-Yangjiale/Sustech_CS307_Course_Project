@@ -30,7 +30,6 @@ class RecordFileHandleTest {
     static BufferPool bufferPool;
     static RecordFileHandle fileHandle;
     static final String TEST_FILENAME = "test_file.db";
-
     @BeforeEach
     void setup() throws DBException, IOException {
         String randomDirName = "test-" + UUID.randomUUID().toString();
